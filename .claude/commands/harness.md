@@ -8,13 +8,121 @@
 
 `/docs/` 하위 문서(PRD, ARCHITECTURE, ADR 등)를 읽고 프로젝트의 기획·아키텍처·설계 의도를 파악한다. 필요시 Explore 에이전트를 병렬로 사용한다.
 
-### B. 논의
+### B. 논의 (Human In The Loop — 필수)
 
-구현을 위해 구체화하거나 기술적으로 결정해야 할 사항이 있으면 사용자에게 제시하고 논의한다.
+탐색(A)에서 PRD/ARCHITECTURE를 읽은 뒤, 아래 체크리스트를 **한 번에 묶어서** 사용자에게 제시한다.
+PRD에서 명확히 읽을 수 없는 항목은 **절대 자율 판단하지 않는다.**
+모든 답변은 마지막에 `phases/decisions.md`에 기록한다 (이 파일은 execute.py 가드레일에 자동 주입됨).
+
+---
+
+#### B-1. 실행 형태 (필수 — 이것이 패턴 A/B/C를 결정)
+
+다음 중 어떤 형태인가요?
+- [ ] **CLI 스크립트** — `python main.py`처럼 실행 후 종료
+- [ ] **데몬 / 백그라운드** — cron, systemd, supervisor 등 상시 실행
+- [ ] **웹 서버 (API만)** — HTTP 엔드포인트, Frontend 없음
+- [ ] **웹 서버 + Frontend UI** — API + React/Vue/Svelte 등
+- [ ] **데스크톱 GUI** — Tkinter, Qt, Electron 등
+- [ ] **라이브러리** — 다른 프로젝트에서 import 하는 모듈
+
+> CLI/스크립트 → **패턴 A** | API 서버 → **패턴 B** | 풀스택 → **패턴 C**
+
+#### B-2. 실행 환경 (필수)
+
+- 로컬(개발자 PC)에서만 실행 / 서버 배포 / Docker 컨테이너 / 클라우드
+- 대상 OS: Linux / macOS / Windows / 크로스플랫폼
+
+#### B-3. 데이터 영속성 (필수)
+
+데이터를 저장해야 하나요?
+- [ ] **없음** — 메모리 또는 임시 처리만
+- [ ] **파일** — JSON/CSV/SQLite 파일 방식
+- [ ] **RDB** — PostgreSQL / MySQL / SQLite (SQLAlchemy/raw SQL)
+- [ ] **NoSQL** — MongoDB / Redis / 기타
+
+#### B-4. 외부 API / 시크릿 (필수)
+
+외부 서비스를 호출하나요?
+- 호출하는 API 목록과 인증 방식(API Key / OAuth / Token / 없음)을 나열해주세요.
+- `.env`에 들어갈 시크릿 키 이름을 확인합니다: (예: `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`)
+
+#### B-5. 인증/인가 (웹 서버인 경우 필수)
+
+사용자 인증이 필요한가요?
+- [ ] **없음** (단일 사용자 / 내부 도구)
+- [ ] **API Key**
+- [ ] **JWT** (stateless)
+- [ ] **Session 쿠키** (stateful)
+- [ ] **OAuth** (Google / GitHub / 기타)
+
+#### B-6. Frontend (UI가 있는 경우 필수)
+
+- 프레임워크: React(Vite) / Next.js / Vue / Svelte / 서버 렌더링(Jinja 등) / 없음
+- 스타일링: Tailwind / CSS Modules / styled-components / 기본 CSS
+
+#### B-7. 언어 구성 (필수)
+
+- [ ] Python만
+- [ ] TypeScript/JavaScript만
+- [ ] C/C++만
+- [ ] Python + TypeScript (풀스택)
+- [ ] 기타 혼합
+
+> Python+TS 혼합이면 `backend/` + `frontend/` 폴더 분리 구조를 권장.
+
+#### B-8. 그 외 확인 사항
+
+- 기존 코드에 기능을 추가하는 건가요, 새로 만드는 건가요?
+- 로깅/모니터링 요구사항이 있나요? (stdout만 / 파일 로그 / 외부 알림)
+- 배포/운영 특수 요구사항이 있나요?
+
+---
+
+#### B-9. 패턴 확정 및 decisions.md 기록 (의무)
+
+위 답변을 바탕으로 phases 패턴을 도출해 사용자에게 제시하고 승인을 받는다:
+
+| 조건 | 패턴 |
+|------|------|
+| CLI/스크립트 + DB 없음/파일 | 패턴 A |
+| 웹 서버(API만) + DB 있음 | 패턴 B |
+| 웹 서버 + Frontend UI | 패턴 C |
+| 기타 | 사용자와 협의해 커스텀 구성 |
+
+승인 후 `phases/decisions.md`에 아래 형식으로 기록한다 (execute.py가 가드레일에 자동 포함):
+
+```markdown
+# Decisions Log — {프로젝트명}
+생성일: {날짜}
+
+## 실행 형태: {결정값}
+## 실행 환경: {결정값}
+## DB: {결정값}
+## 인증: {결정값}
+## 외부 API: {목록}
+## 시크릿 키: {목록}
+## 언어 구성: {결정값}
+## 선택한 패턴: 패턴 {A/B/C} — {이유 한 줄}
+## 추가 결정 사항: {있으면 기록}
+```
 
 ### C. Step 설계
 
 사용자가 구현 계획 작성을 지시하면 여러 step으로 나뉜 초안을 작성해 피드백을 요청한다.
+
+> **실행 방식**: 각 step은 독립 Claude 세션에서 **순차** 실행된다 (병렬 아님). step 간 통신은 `summary` 필드 하나뿐이다.
+
+**권장 step 순서 (ADR-010):**
+```
+Step 0 — DB 스키마 (있는 경우)
+Step 1 — Backend Core (서비스·저장소·도메인 로직)
+Step 2 — Server 레이어 (API 라우터·미들웨어·진입점) — 웹 서비스인 경우
+Step 3 — Frontend (UI) — 웹 UI가 있는 경우
+Step N — Tests (항상 마지막)
+```
+
+> CLI/스크립트처럼 해당 없는 step은 생략한다. Backend Core + Server를 하나로 합쳐도 된다 (로직이 단순한 경우).
 
 설계 원칙:
 
@@ -24,7 +132,7 @@
 4. **시그니처 수준 지시** — 함수/클래스의 인터페이스만 제시하고 내부 구현은 에이전트 재량에 맡긴다. 단, 설계 의도에서 벗어나면 안 되는 핵심 규칙(멱등성, 보안, 데이터 무결성 등)은 반드시 명시한다.
 5. **AC는 실행 가능한 커맨드** — "~가 동작해야 한다" 같은 추상적 서술이 아닌 `npm run build && npm test` 같은 실제 실행 가능한 검증 커맨드를 포함한다.
 6. **주의사항은 구체적으로** — "조심해라" 대신 "X를 하지 마라. 이유: Y" 형식으로 적는다.
-7. **네이밍** — step name은 kebab-case slug로, 해당 step의 핵심 모듈/작업을 한두 단어로 표현한다 (예: `project-setup`, `api-layer`, `auth-flow`).
+7. **네이밍** — step name은 kebab-case slug로, 해당 step의 핵심 모듈/작업을 한두 단어로 표현한다 (예: `project-setup`, `backend-core`, `server-layer`, `frontend-ui`, `tests`).
 
 ### D. 파일 생성
 

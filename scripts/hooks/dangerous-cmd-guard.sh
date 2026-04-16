@@ -38,8 +38,8 @@ DANGEROUS_PATTERNS=(
     # 재귀 삭제 — 루트, 홈, 와일드카드, 현재 디렉토리
     'rm[[:space:]]+-[rRfF]*r[fF]?[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
     'rm[[:space:]]+-[rRfF]*f[rR]?[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
-    # 긴 옵션 형태 (--recursive --force)
-    'rm[[:space:]]+.*(--recursive|--force)[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
+    # 긴 옵션 형태 (--recursive --force) — 명령어 구분자를 넘지 않도록 [^;|&]* 사용
+    'rm[[:space:]]+[^;|&]*(--recursive|--force)[^;|&]*[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
     # Git 위험 명령어
     'git[[:space:]]+push[[:space:]]+.*--force'
     'git[[:space:]]+push[[:space:]]+-f([[:space:]]|$)'

@@ -184,11 +184,13 @@ class TestLoadGuardrails:
     def test_empty_project(self, tmp_path):
         with patch.object(ex, "ROOT", tmp_path):
             # executor가 필요 없는 static-like 동작이므로 임시 인스턴스
+            # _phases_dir 설정 필요 (_load_guardrails가 decisions.md 탐색에 사용)
             phases_dir = tmp_path / "phases" / "dummy"
             phases_dir.mkdir(parents=True)
             idx = {"project": "T", "phase": "t", "steps": []}
             (phases_dir / "index.json").write_text(json.dumps(idx))
             inst = ex.StepExecutor.__new__(ex.StepExecutor)
+            inst._phases_dir = tmp_path / "phases"
             result = inst._load_guardrails()
         assert result == ""
 
@@ -557,3 +559,248 @@ class TestCheckBlockers:
         with pytest.raises(SystemExit) as exc_info:
             inst._check_blockers()
         assert exc_info.value.code == 2
+
+    def test_all_pending_passes(self, tmp_project):
+        """모두 pending이면 통과 (exit 없음)."""
+        steps = [
+            {"step": 0, "name": "a", "status": "pending"},
+            {"step": 1, "name": "b", "status": "pending"},
+        ]
+        inst = self._make_executor_with_steps(tmp_project, steps)
+        inst._check_blockers()  # 예외 없어야 함
+
+    def test_error_in_middle_detected(self, tmp_project):
+        """[completed, error, completed] — 중간 error step을 반드시 감지."""
+        steps = [
+            {"step": 0, "name": "a", "status": "completed"},
+            {"step": 1, "name": "b", "status": "error", "error_message": "mid-fail"},
+            {"step": 2, "name": "c", "status": "completed"},
+        ]
+        inst = self._make_executor_with_steps(tmp_project, steps)
+        with pytest.raises(SystemExit) as exc_info:
+            inst._check_blockers()
+        assert exc_info.value.code == 1
+
+    def test_error_before_blocked_prefers_error(self, tmp_project):
+        """error가 blocked보다 먼저 나오면 exit(1)."""
+        steps = [
+            {"step": 0, "name": "a", "status": "error", "error_message": "oops"},
+            {"step": 1, "name": "b", "status": "blocked", "blocked_reason": "wait"},
+        ]
+        inst = self._make_executor_with_steps(tmp_project, steps)
+        with pytest.raises(SystemExit) as exc_info:
+            inst._check_blockers()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# _validate_gitignore
+# ---------------------------------------------------------------------------
+
+class TestValidateGitignore:
+    def test_no_env_file_passes(self, tmp_project):
+        """`.env` 없으면 검사 자체를 건너뛴다."""
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        inst._validate_gitignore()  # 예외 없어야 함
+
+    def test_env_without_gitignore_exits(self, tmp_project):
+        """`.env` 존재 + `.gitignore` 없음 → exit(1)."""
+        (tmp_project / ".env").write_text("SECRET=x")
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        with pytest.raises(SystemExit) as exc_info:
+            inst._validate_gitignore()
+        assert exc_info.value.code == 1
+
+    def test_env_in_gitignore_without_entry_exits(self, tmp_project):
+        """`.env` 존재 + `.gitignore`에 `.env` 항목 없음 → exit(1)."""
+        (tmp_project / ".env").write_text("SECRET=x")
+        (tmp_project / ".gitignore").write_text("venv/\n__pycache__/\n*.pyc\n")
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        with pytest.raises(SystemExit) as exc_info:
+            inst._validate_gitignore()
+        assert exc_info.value.code == 1
+
+    def test_env_properly_gitignored_passes(self, tmp_project):
+        """`.env` 존재 + `.gitignore`에 `.env` 포함 → 통과."""
+        (tmp_project / ".env").write_text("SECRET=x")
+        (tmp_project / ".gitignore").write_text("venv/\n.env\n*.pyc\n")
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        inst._validate_gitignore()  # 예외 없어야 함
+
+
+# ---------------------------------------------------------------------------
+# _lint_step_file
+# ---------------------------------------------------------------------------
+
+class TestLintStepFile:
+    def test_valid_step_no_warnings(self, tmp_path):
+        """필수 섹션이 모두 있으면 경고 없음."""
+        f = tmp_path / "step0.md"
+        f.write_text("## 작업\n\n세부 내용\n\n## Acceptance Criteria\n\npytest\n")
+        warnings = ex.StepExecutor._lint_step_file(f)
+        assert warnings == []
+
+    def test_missing_task_section_warns(self, tmp_path):
+        f = tmp_path / "step0.md"
+        f.write_text("## Acceptance Criteria\n\npytest\n")
+        warnings = ex.StepExecutor._lint_step_file(f)
+        assert any("작업" in w for w in warnings)
+
+    def test_missing_ac_section_warns(self, tmp_path):
+        f = tmp_path / "step0.md"
+        f.write_text("## 작업\n\n세부 내용\n")
+        warnings = ex.StepExecutor._lint_step_file(f)
+        assert any("Acceptance Criteria" in w for w in warnings)
+
+    def test_external_reference_warns(self, tmp_path):
+        f = tmp_path / "step0.md"
+        f.write_text("## 작업\n\n이전 대화에서 논의한 것처럼 구현하세요.\n\n## Acceptance Criteria\n\npytest\n")
+        warnings = ex.StepExecutor._lint_step_file(f)
+        assert any("이전 대화" in w for w in warnings)
+
+    def test_multiple_forbidden_phrases_each_warn(self, tmp_path):
+        f = tmp_path / "step0.md"
+        f.write_text("## 작업\n\n앞서 말한 대로, 아까 논의했듯 구현.\n\n## Acceptance Criteria\n\npytest\n")
+        warnings = ex.StepExecutor._lint_step_file(f)
+        assert len(warnings) >= 2
+
+
+# ---------------------------------------------------------------------------
+# _load_guardrails — decisions.md 포함 검증
+# ---------------------------------------------------------------------------
+
+class TestLoadGuardrailsDecisions:
+    def test_decisions_md_included(self, tmp_project):
+        """phases/decisions.md 가 있으면 가드레일에 포함되어야 한다."""
+        phases_dir = tmp_project / "phases"
+        phases_dir.mkdir(exist_ok=True)
+        (phases_dir / "decisions.md").write_text("# 결정 사항\n\n- SQLite 사용\n")
+
+        # executor 인스턴스 구성
+        d = phases_dir / "decisions-test"
+        d.mkdir()
+        idx = {"project": "T", "phase": "t", "steps": []}
+        (d / "index.json").write_text(json.dumps(idx))
+
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        inst._phases_dir = phases_dir
+        inst._phase_dir = d
+        inst._phase_dir_name = "decisions-test"
+        inst._index_file = d / "index.json"
+        inst._top_index_file = phases_dir / "index.json"
+        inst._phase_name = "t"
+
+        with patch.object(ex, "ROOT", tmp_project):
+            result = inst._load_guardrails()
+
+        assert "SQLite 사용" in result
+        assert "프로젝트 결정 사항" in result
+
+    def test_decisions_md_absent_no_error(self, executor, tmp_project):
+        """phases/decisions.md 없어도 에러 없이 동작."""
+        decisions = tmp_project / "phases" / "decisions.md"
+        if decisions.exists():
+            decisions.unlink()
+        with patch.object(ex, "ROOT", tmp_project):
+            result = executor._load_guardrails()
+        assert "결정 사항" not in result
+
+
+# ---------------------------------------------------------------------------
+# _invoke_claude — TimeoutExpired 처리
+# ---------------------------------------------------------------------------
+
+class TestInvokeClaudeTimeout:
+    def _make_executor(self, tmp_project, phase_dir):
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        inst._phases_dir = tmp_project / "phases"
+        inst._phase_dir = phase_dir
+        inst._phase_dir_name = "0-mvp"
+        inst._index_file = phase_dir / "index.json"
+        inst._top_index_file = tmp_project / "phases" / "index.json"
+        inst._phase_name = "mvp"
+        inst._project = "TestProject"
+        inst._total = 3
+        return inst
+
+    def test_timeout_returns_error_output(self, tmp_project, phase_dir):
+        """`subprocess.TimeoutExpired` 발생 시 exitCode=-1 output을 반환해야 한다."""
+        (phase_dir / "step2.md").write_text(
+            "## 작업\n\n구현\n\n## Acceptance Criteria\n\npytest\n"
+        )
+        inst = self._make_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui", "status": "pending"}
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 1800)):
+            output = inst._invoke_claude(step, "preamble text")
+
+        assert output["exitCode"] == -1
+        assert "타임아웃" in output["stderr"]
+        out_path = phase_dir / "step2-output.json"
+        assert out_path.exists()
+        saved = json.loads(out_path.read_text())
+        assert saved["exitCode"] == -1
+
+    def test_timeout_output_json_written(self, tmp_project, phase_dir):
+        """타임아웃 시 step-output.json이 저장되어야 한다."""
+        (phase_dir / "step2.md").write_text(
+            "## 작업\n\n구현\n\n## Acceptance Criteria\n\npytest\n"
+        )
+        inst = self._make_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui", "status": "pending"}
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 1800)):
+            inst._invoke_claude(step, "preamble")
+
+        out_path = phase_dir / "step2-output.json"
+        data = json.loads(out_path.read_text())
+        assert data["step"] == 2
+        assert data["name"] == "ui"
+
+
+# ---------------------------------------------------------------------------
+# _normalize_error — fast_fail과 fingerprint 상호작용
+# ---------------------------------------------------------------------------
+
+class TestNormalizeError:
+    def test_strips_timestamps(self):
+        msg = "Error at 2025-01-01T12:00:00+0900: connection refused"
+        result = ex.StepExecutor._normalize_error(msg)
+        assert "2025-01-01" not in result
+        assert "TS" in result
+
+    def test_strips_tmp_paths(self):
+        msg = "File /tmp/pytest-abc123/test.py not found"
+        result = ex.StepExecutor._normalize_error(msg)
+        assert "pytest-abc123" not in result
+        assert "/tmp/X" in result
+
+    def test_only_top_3_lines(self):
+        msg = "line1\nline2\nline3\nline4\nline5"
+        result = ex.StepExecutor._normalize_error(msg)
+        assert "line4" not in result
+        assert "line3" in result
+
+    def test_same_error_same_fingerprint(self):
+        """동일 에러는 동일 fingerprint를 만들어야 한다."""
+        msg1 = "ModuleNotFoundError: No module named 'requests'"
+        msg2 = "ModuleNotFoundError: No module named 'requests'"
+        assert ex.StepExecutor._normalize_error(msg1) == ex.StepExecutor._normalize_error(msg2)
+
+    def test_different_paths_same_fingerprint(self):
+        """경로만 다른 동일 에러는 같은 fingerprint여야 한다."""
+        msg1 = "Error: /tmp/run-abc/test.py not found"
+        msg2 = "Error: /tmp/run-xyz/test.py not found"
+        assert ex.StepExecutor._normalize_error(msg1) == ex.StepExecutor._normalize_error(msg2)

@@ -171,8 +171,13 @@ fi
 # ─────────────────────────────────────
 
 IS_PYTHON=false
-if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || \
-   [ -f "main.py" ] || ls src/**/*.py >/dev/null 2>&1 || ls *.py >/dev/null 2>&1; then
+# globstar 의존 금지 — find로 안전하게 탐지 (monorepo backend/ 폴더도 감지)
+if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "main.py" ] || \
+   [ -f "backend/pyproject.toml" ] || [ -f "backend/requirements.txt" ] || \
+   [ -n "$(find . -maxdepth 4 -name '*.py' \
+       -not -path '*/venv/*' -not -path '*/.venv/*' \
+       -not -path '*/node_modules/*' -not -path '*/__pycache__/*' \
+       -print -quit 2>/dev/null)" ]; then
     IS_PYTHON=true
 fi
 
@@ -329,7 +334,10 @@ if [ "$IS_TS" = true ]; then
             elif [ -f "node_modules/.bin/biome" ]; then
                 run_check "biome check (린트+포맷)" "required" node_modules/.bin/biome check .
             fi
-        elif [ -f ".eslintrc" ] || [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || \
+        elif [ -f "eslint.config.js" ] || [ -f "eslint.config.mjs" ] || [ -f "eslint.config.cjs" ] || \
+             [ -f ".eslintrc" ] || [ -f ".eslintrc.js" ] || [ -f ".eslintrc.cjs" ] || \
+             [ -f ".eslintrc.mjs" ] || [ -f ".eslintrc.json" ] || [ -f ".eslintrc.yaml" ] || \
+             [ -f ".eslintrc.yml" ] || \
              ([ -f "package.json" ] && grep -q '"eslint"' package.json 2>/dev/null); then
             if [ -f "node_modules/.bin/eslint" ]; then
                 run_check "eslint" "required" node_modules/.bin/eslint .

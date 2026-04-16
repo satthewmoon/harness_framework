@@ -83,6 +83,7 @@ class StepExecutor:
     def run(self):
         self._print_header()
         self._check_blockers()
+        self._validate_gitignore()
         self._checkout_branch()
         guardrails = self._load_guardrails()
         self._ensure_created_at()
@@ -349,8 +350,9 @@ class StepExecutor:
         print(f"{'='*60}")
 
     def _check_blockers(self):
+        """error/blocked step이 있으면 즉시 중단. 전체 순회로 어떤 순서든 놓치지 않는다."""
         index = self._read_json(self._index_file)
-        for s in reversed(index["steps"]):
+        for s in index["steps"]:
             if s["status"] == "error":
                 print(f"\n  ✗ Step {s['step']} ({s['name']}) failed.")
                 print(f"  Error: {s.get('error_message', 'unknown')}")
@@ -361,8 +363,22 @@ class StepExecutor:
                 print(f"  Reason: {s.get('blocked_reason', 'unknown')}")
                 print(f"  Resolve and reset status to 'pending' to retry.")
                 sys.exit(2)
-            if s["status"] != "pending":
-                break
+
+    def _validate_gitignore(self):
+        """.env 파일이 존재하는데 .gitignore에 없으면 커밋 전에 경고하고 중단한다."""
+        root = Path(self._root)
+        env_file = root / ".env"
+        gitignore = root / ".gitignore"
+        if not env_file.exists():
+            return
+        if not gitignore.exists():
+            print("\n  ERROR: .env 파일이 있지만 .gitignore가 없습니다.")
+            print("  .gitignore를 생성하고 '.env'를 포함하세요. git add -A 시 .env가 커밋됩니다.")
+            sys.exit(1)
+        if ".env" not in gitignore.read_text():
+            print("\n  ERROR: .env 파일이 있지만 .gitignore에 '.env'가 포함되지 않았습니다.")
+            print("  .gitignore에 '.env'를 추가한 뒤 다시 실행하세요.")
+            sys.exit(1)
 
     def _ensure_created_at(self):
         index = self._read_json(self._index_file)
@@ -472,13 +488,14 @@ class StepExecutor:
             )
 
             # 동일 에러 fingerprint 비교 (ADR-015)
+            # fast_fail 시에는 fingerprint/repeat_count 모두 갱신 안 함 — 탐색 허용
             current_fingerprint = self._normalize_error(err_msg)
             if not fast_fail:
                 if current_fingerprint == prev_fingerprint:
                     repeat_count += 1
                 else:
                     repeat_count = 1
-            prev_fingerprint = current_fingerprint
+                prev_fingerprint = current_fingerprint
 
             # 동일 에러 3회 이상 → blocked 강제 전환 (ADR-015)
             if repeat_count >= 3:

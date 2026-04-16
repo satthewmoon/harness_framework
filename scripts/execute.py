@@ -304,10 +304,23 @@ class StepExecutor:
                 print(f"    - {w}")
 
         prompt = preamble + step_file.read_text()
-        result = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
-            cwd=self._root, capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            result = subprocess.run(
+                ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
+                cwd=self._root, capture_output=True, text=True, timeout=1800,
+            )
+        except subprocess.TimeoutExpired:
+            timeout_msg = "claude CLI 1800초(30분) 타임아웃 초과. step 범위가 너무 크거나 응답 없음."
+            print(f"\n  ERROR: {timeout_msg}")
+            output = {
+                "step": step_num, "name": step_name,
+                "exitCode": -1,
+                "stdout": "", "stderr": timeout_msg,
+            }
+            out_path = self._phase_dir / f"step{step_num}-output.json"
+            with open(out_path, "w") as f:
+                json.dump(output, f, indent=2, ensure_ascii=False)
+            return output
 
         if result.returncode != 0:
             print(f"\n  WARN: Claude가 비정상 종료됨 (code {result.returncode})")
@@ -421,7 +434,7 @@ class StepExecutor:
             t_start = time.monotonic()
             with progress_indicator(tag) as pi:
                 self._invoke_claude(step, preamble)
-                elapsed = int(pi.elapsed)
+            elapsed = int(pi.elapsed)  # with 블록 종료 후 finally에서 설정됨
 
             # 60초 이내 즉시 실패 → 재시도 카운트 미집계 (ADR-015)
             fast_fail = (time.monotonic() - t_start) < 60

@@ -7,11 +7,11 @@
 
 set -u  # set -e는 의도적으로 사용하지 않음: 개별 체크 실패 후 메시지 수집 필요
 
-# Stop 훅: stdin(JSON)을 읽어 버려야 Claude Code가 정상 동작함
-cat /dev/stdin > /dev/null 2>&1 &
+# Stop 훅: stdin(JSON)을 읽어 버려야 Claude Code가 정상 동작함 (동기 소비)
+cat /dev/stdin > /dev/null 2>&1 || true
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$PROJECT_ROOT"
+cd "$PROJECT_ROOT" || exit 1
 
 # venv가 있으면 활성화 (ruff, pytest 등 로컬 도구 사용)
 if [ -f "venv/bin/activate" ]; then
@@ -23,6 +23,10 @@ FAIL=0
 WARNINGS=()
 ERRORS=()
 
+# 세션별 임시 로그 파일 (경쟁 조건 방지)
+CB_TMP="$(mktemp /tmp/cb-output.XXXXXX.log)"
+trap 'rm -f "$CB_TMP"' EXIT
+
 # ─────────────────────────────────────
 # 헬퍼 함수
 # ─────────────────────────────────────
@@ -32,11 +36,11 @@ run_check() {
     local is_required="$2"  # "required" or "optional"
     shift 2
 
-    if "$@" >/tmp/cb-output.log 2>&1; then
+    if "$@" >"$CB_TMP" 2>&1; then
         echo "  ✓ $name"
     else
         local output
-        output="$(cat /tmp/cb-output.log)"
+        output="$(cat "$CB_TMP")"
         if [ "$is_required" = "required" ]; then
             echo "  ✗ $name [FAIL]"
             ERRORS+=("── $name ──")
@@ -177,10 +181,12 @@ if [ "$IS_PYTHON" = true ]; then
     echo "▶ Python 검사"
 
     # ─── 하드코딩된 시크릿 스캔 (C1, required) ───
+    # tests/ 폴더는 mock 값이 많아 오탐이 크므로 제외
     if [ -d "src" ]; then
         SECRET_PATTERN='(api_key|password|token|secret|passwd)[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}'
         SECRET_HITS="$(grep -rnE --include='*.py' "$SECRET_PATTERN" src/ 2>/dev/null \
             | grep -vE '(os\.getenv|os\.environ|getenv\(|config\.|settings\.|Field\(|#[[:space:]]*nosec)' \
+            | grep -vE '/tests?/' \
             || true)"
         if [ -n "$SECRET_HITS" ]; then
             echo "  ✗ 하드코딩된 시크릿 감지 [FAIL]"
@@ -293,7 +299,7 @@ if [ "$IS_TS" = true ]; then
         TS_ROOT="frontend"
     fi
 
-    cd "$TS_ROOT"
+    cd "$TS_ROOT" || { echo "  ✗ 디렉토리 전환 실패: $TS_ROOT"; exit 1; }
 
     # node_modules가 git에 추적되는지 확인
     if git ls-files --error-unmatch node_modules >/dev/null 2>&1; then
@@ -347,7 +353,7 @@ if [ "$IS_TS" = true ]; then
         fi
 
         if [ -n "$TEST_CMD" ]; then
-            if [ -d "tests" ] || find src -name "*.test.*" >/dev/null 2>&1; then
+            if [ -d "tests" ] || [ -n "$(find src -name '*.test.*' -print -quit 2>/dev/null)" ]; then
                 run_check "TS 테스트" "required" bash -c "$TEST_CMD"
             else
                 echo "  ⚠ 테스트 파일 없음 [경고]"
@@ -357,7 +363,7 @@ if [ "$IS_TS" = true ]; then
     fi
 
     # monorepo라면 원래 디렉토리로 복귀
-    cd "$PROJECT_ROOT"
+    cd "$PROJECT_ROOT" || exit 1
 fi
 
 # ─────────────────────────────────────

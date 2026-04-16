@@ -129,10 +129,6 @@
 - **트레이드오프**: 전체 스위트 실행으로 commit 전 대기 시간 증가. 테스트가 100개 넘어가면 수십 초 추가 소요. 허용 가능한 범위. 1000개 이상이면 병렬 실행(`pytest-xdist`)을 ADR-100+으로 추가.
 - **연결**: CLAUDE.md C8, ARCHITECTURE.md "테스트 전략 및 회귀 방지" 섹션.
 
----
-
-## 프로젝트별 결정 (ADR-100부터 자유롭게 추가)
-
 ### ADR-018: TypeScript 린트·포맷 도구로 biome 권장, 테스트는 vitest/jest
 - **결정**: TypeScript/JavaScript 프로젝트의 린트+포맷 통합 도구로 `biome`를 권장한다. ESLint + Prettier 조합도 허용하지만 biome가 기본. 테스트는 Vite 프로젝트는 `vitest`, Node 서버는 `jest` 또는 `node --test`.
 - **이유**: biome는 Rust 구현체로 10~100배 빠름. 린트·포맷·import 정렬을 하나의 도구로. ADR-001(Python ruff)과 동일한 철학. vitest는 Vite 에코시스템과 자연스럽게 통합.

@@ -55,9 +55,19 @@ run_check() {
 }
 
 tool_check() {
+    # $1=tool, $2(optional)="required" — Python 필수 도구(ruff, pytest)는 미설치 시 FAIL
     local tool="$1"
+    local level="${2:-optional}"
     if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "  ⚠ $tool 미설치 — 스킵"
+        if [ "$level" = "required" ]; then
+            echo "  ✗ $tool 미설치 [FAIL — C2 필수 도구]"
+            record_error "$tool 미설치 (C2/C8 위반)" \
+                "$tool 은 Python 프로젝트의 필수 도구입니다." \
+                "설치: pip install $tool" \
+                "또는 requirements-dev.txt에 추가 후 pip install -r requirements-dev.txt"
+        else
+            echo "  ⚠ $tool 미설치 — 스킵"
+        fi
         return 1
     fi
     return 0
@@ -171,13 +181,15 @@ fi
 # ─────────────────────────────────────
 
 IS_PYTHON=false
-# globstar 의존 금지 — find로 안전하게 탐지 (monorepo backend/ 폴더도 감지)
-if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "main.py" ] || \
-   [ -f "backend/pyproject.toml" ] || [ -f "backend/requirements.txt" ] || \
-   [ -n "$(find . -maxdepth 4 -name '*.py' \
-       -not -path '*/venv/*' -not -path '*/.venv/*' \
-       -not -path '*/node_modules/*' -not -path '*/__pycache__/*' \
-       -print -quit 2>/dev/null)" ]; then
+# .py 파일 존재 여부를 필수 조건으로 — pyproject.toml은 Rust/TypeScript에도 사용되므로
+# .py 파일 없이 설정 파일만 존재하는 비-Python 프로젝트 오탐 방지
+_HAS_PY_FILES="$(find . -maxdepth 4 -name '*.py' \
+    -not -path '*/venv/*' -not -path '*/.venv/*' \
+    -not -path '*/node_modules/*' -not -path '*/__pycache__/*' \
+    -print -quit 2>/dev/null)"
+if [ -n "$_HAS_PY_FILES" ] && \
+   { [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "main.py" ] || \
+     [ -f "backend/pyproject.toml" ] || [ -f "backend/requirements.txt" ]; }; then
     IS_PYTHON=true
 fi
 
@@ -191,6 +203,7 @@ if [ "$IS_PYTHON" = true ]; then
         SECRET_PATTERN='(api_key|password|token|secret|passwd)[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}'
         SECRET_HITS="$(grep -rnE --include='*.py' "$SECRET_PATTERN" src/ 2>/dev/null \
             | grep -vE '(os\.getenv|os\.environ|getenv\(|config\.|settings\.|Field\(|#[[:space:]]*nosec)' \
+            | grep -vE '(Form\(|Query\(|Body\(|Header\(|Depends\(|request\.|\.headers\.|\.get\(|\.decode\(|jwt\.|hashlib\.|Annotated\[)' \
             | grep -vE '/tests?/' \
             || true)"
         if [ -n "$SECRET_HITS" ]; then
@@ -234,7 +247,7 @@ if [ "$IS_PYTHON" = true ]; then
     fi
 
     # ─── ruff 린트 (C2, required) ───
-    if tool_check "ruff"; then
+    if tool_check "ruff" "required"; then
         run_check "ruff check (린트)" "required" ruff check .
         run_check "ruff format --check (포맷)" "optional" ruff format --check .
     fi
@@ -243,7 +256,7 @@ if [ "$IS_PYTHON" = true ]; then
     if [ -d "tests" ]; then
         TEST_FILES="$(find tests -name 'test_*.py' -o -name '*_test.py' 2>/dev/null | wc -l)"
         if [ "$TEST_FILES" -gt 0 ]; then
-            if tool_check "pytest"; then
+            if tool_check "pytest" "required"; then
                 COV_THRESHOLD="$(read_coverage_threshold)"
 
                 # pytest-cov 설치 여부 확인

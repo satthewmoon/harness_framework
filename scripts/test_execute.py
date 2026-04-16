@@ -635,6 +635,18 @@ class TestValidateGitignore:
         inst._root = str(tmp_project)
         inst._validate_gitignore()  # 예외 없어야 함
 
+    def test_env_example_only_does_not_pass(self, tmp_project):
+        """.gitignore에 `.env.example`만 있으면 `.env`는 무시되지 않음 → exit(1) 회귀 테스트."""
+        (tmp_project / ".env").write_text("SECRET=x")
+        # .env.example 항목만 있고 .env 자체는 없음 — 부분 문자열 오탐 방지
+        (tmp_project / ".gitignore").write_text("venv/\n.env.example\n*.pyc\n")
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        with pytest.raises(SystemExit) as exc_info:
+            inst._validate_gitignore()
+        assert exc_info.value.code == 1
+
 
 # ---------------------------------------------------------------------------
 # _lint_step_file

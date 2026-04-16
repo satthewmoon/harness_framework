@@ -35,11 +35,11 @@ fi
 
 # 차단 패턴 목록 (확장 정규식)
 DANGEROUS_PATTERNS=(
-    # 재귀 삭제 — 루트, 홈, 와일드카드, 현재 디렉토리
-    'rm[[:space:]]+-[rRfF]*r[fF]?[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
-    'rm[[:space:]]+-[rRfF]*f[rR]?[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
+    # 재귀 삭제 — 루트, 홈, 와일드카드, 현재 디렉토리, ${HOME} 중괄호 확장
+    'rm[[:space:]]+-[rRfF]*r[fF]?[[:space:]]+(\/|~|\*|\$\{?HOME\}?|\.\.?(/|$))'
+    'rm[[:space:]]+-[rRfF]*f[rR]?[[:space:]]+(\/|~|\*|\$\{?HOME\}?|\.\.?(/|$))'
     # 긴 옵션 형태 (--recursive --force) — 명령어 구분자를 넘지 않도록 [^;|&]* 사용
-    'rm[[:space:]]+[^;|&]*(--recursive|--force)[^;|&]*[[:space:]]+(\/|~|\*|\$HOME|\.\.?(/|$))'
+    'rm[[:space:]]+[^;|&]*(--recursive|--force)[^;|&]*[[:space:]]+(\/|~|\*|\$\{?HOME\}?|\.\.?(/|$))'
     # Git 위험 명령어
     'git[[:space:]]+push[[:space:]]+.*--force'
     'git[[:space:]]+push[[:space:]]+-f([[:space:]]|$)'
@@ -56,9 +56,11 @@ DANGEROUS_PATTERNS=(
     'mkfs\.'
     'dd[[:space:]]+.*of=/dev/[sh]d'
     'dd[[:space:]]+.*of=/dev/nvme'
-    # 권한 위험
+    # 권한 위험 — -R 777 / setuid(4xxx) / setgid(2xxx) / +s 비트
     'chmod[[:space:]]+-R[[:space:]]+[0-7]*7[0-7][0-7][[:space:]]+(\/|~|\*)'
     'chmod[[:space:]]+-R[[:space:]]+777'
+    'chmod[[:space:]]+[0-9]*[46][0-7][0-7][0-7][[:space:]]'
+    'chmod[[:space:]]+[ugoa]*[+]s'
     # 원격 스크립트 실행 (curl/wget pipe to shell)
     'curl[[:space:]]+.*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh'
     'wget[[:space:]]+.*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh'

@@ -40,10 +40,14 @@ case "$FILE_PATH" in
         exit 0
         ;;
     # 문서·설정·메타 파일
-    *.md|*.txt|*.json|*.yaml|*.yml|*.toml|*.cfg|*.ini|*.env*|\
+    *.md|*.txt|*.json|*.yaml|*.yml|*.toml|*.cfg|*.ini|\
     *.gitignore|*requirements*.txt|*Makefile|*CMakeLists.txt|\
     *.clang-format|*.clang-tidy|*pyproject.toml|\
     */phases/*|*/.claude/*|*/.planning/*|*/docs/*|*/scripts/hooks/*)
+        exit 0
+        ;;
+    # .env 파일 정확히 (예: .env, .env.local, .env.prod — 단 .environment.py는 제외)
+    */.env|*/.env.*|.env|.env.*)
         exit 0
         ;;
     # __init__.py, config.py 등 로직 없는 파일

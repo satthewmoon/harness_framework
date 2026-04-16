@@ -135,6 +135,7 @@ class StepExecutor:
         print(f"  Branch: {branch}")
 
     def _commit_step(self, step_num: int, step_name: str):
+        """2단계 커밋: feat(코드) + chore(메타). 코드 커밋 실패 시 chore는 건너뜀 (ADR-008)."""
         output_rel = f"phases/{self._phase_dir_name}/step{step_num}-output.json"
         index_rel = f"phases/{self._phase_dir_name}/index.json"
 
@@ -149,13 +150,27 @@ class StepExecutor:
                 print(f"  Commit: {msg}")
             else:
                 print(f"  WARN: 코드 커밋 실패: {r.stderr.strip()}")
+                # 코드 커밋 실패 시 chore 커밋도 건너뜀 — 혼합 커밋 방지 (ADR-008)
+                return
 
-        self._run_git("add", "-A")
+        # chore 커밋: output.json + index.json 명시적 add (코드 변경 재포함 방지)
+        self._run_git("add", "--", output_rel, index_rel)
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
             msg = self.CHORE_MSG.format(phase=self._phase_name, num=step_num)
             r = self._run_git("commit", "-m", msg)
             if r.returncode != 0:
                 print(f"  WARN: housekeeping 커밋 실패: {r.stderr.strip()}")
+
+    def _commit_step_meta_only(self, step_num: int, step_name: str):
+        """blocked/error 상태에서 index.json만 chore 커밋. 깨진 코드를 feat:로 커밋하지 않는다."""
+        index_rel = f"phases/{self._phase_dir_name}/index.json"
+        output_rel = f"phases/{self._phase_dir_name}/step{step_num}-output.json"
+        self._run_git("add", "--", index_rel, output_rel)
+        if self._run_git("diff", "--cached", "--quiet").returncode != 0:
+            msg = self.CHORE_MSG.format(phase=self._phase_name, num=step_num)
+            r = self._run_git("commit", "-m", msg)
+            if r.returncode != 0:
+                print(f"  WARN: 메타 커밋 실패: {r.stderr.strip()}")
 
     # --- top-level index ---
 
@@ -176,13 +191,15 @@ class StepExecutor:
     # --- guardrails & context ---
 
     def _load_guardrails(self) -> str:
+        # self._phases_dir.parent == 프로젝트 루트 — ROOT 전역과 일관성 유지
+        project_root = self._phases_dir.parent
         sections = []
-        claude_md = ROOT / "CLAUDE.md"
+        claude_md = project_root / "CLAUDE.md"
         if claude_md.exists():
             text = claude_md.read_text()
             self._validate_no_placeholders(claude_md, text)
             sections.append(f"## 프로젝트 규칙 (CLAUDE.md)\n\n{text}")
-        docs_dir = ROOT / "docs"
+        docs_dir = project_root / "docs"
         if docs_dir.is_dir():
             for doc in sorted(docs_dir.glob("*.md")):
                 sections.append(f"## {doc.stem}\n\n{doc.read_text()}")
@@ -208,6 +225,11 @@ class StepExecutor:
         if unresolved:
             print(f"\n  ⚠ WARN: {path.name}에 미치환 placeholder가 있습니다: {unresolved[:5]}")
             print(f"  Hint: 프로젝트 CLAUDE.md의 {{프로젝트명}}, C7 등을 먼저 채우세요.")
+            # 비대화형 환경(CI, 파이프, --dangerously-skip-permissions)에서는
+            # EOFError로 의도치 않게 exit(3)이 되는 것을 방지 — 경고만 출력 후 진행
+            if not sys.stdin.isatty():
+                print("  (비대화형 환경 감지 — 경고 출력 후 자동 진행)")
+                return
             print(f"  계속 진행하려면 Enter를 누르세요. 중단하려면 Ctrl+C를 누르세요.")
             try:
                 input()
@@ -375,7 +397,10 @@ class StepExecutor:
             print("\n  ERROR: .env 파일이 있지만 .gitignore가 없습니다.")
             print("  .gitignore를 생성하고 '.env'를 포함하세요. git add -A 시 .env가 커밋됩니다.")
             sys.exit(1)
-        if ".env" not in gitignore.read_text():
+        # 라인 단위 엄격 매칭 — ".env.example" 같은 부분 문자열 오탐 방지
+        gitignore_lines = {ln.strip() for ln in gitignore.read_text().splitlines()}
+        env_ignored = any(ln in (".env", "/.env", "*.env") for ln in gitignore_lines)
+        if not env_ignored:
             print("\n  ERROR: .env 파일이 있지만 .gitignore에 '.env'가 포함되지 않았습니다.")
             print("  .gitignore에 '.env'를 추가한 뒤 다시 실행하세요.")
             sys.exit(1)
@@ -401,13 +426,18 @@ class StepExecutor:
         done = sum(1 for s in self._read_json(self._index_file)["steps"] if s["status"] == "completed")
         prev_error: Optional[str] = None
         prev_fingerprint: Optional[str] = None
-        repeat_count = 0
+        repeat_count = 0  # fast_fail 제외한 동일 에러 연속 횟수
 
         # blocked 복구 시 에러 history를 프롬프트에 전달
         existing_step = next((s for s in self._read_json(self._index_file)["steps"] if s["step"] == step_num), {})
         prior_history = existing_step.get("error_history", [])
 
-        for attempt in range(1, self.MAX_RETRIES + 1):
+        # ADR-015: MAX_RETRIES는 실질 시도(느린 실패 포함) 횟수이므로 fast_fail attempt는
+        # 루프 카운트를 소모하지 않는다. 무한루프 방지용 hard limit는 MAX_RETRIES * 3.
+        MAX_TOTAL_ATTEMPTS = self.MAX_RETRIES * 3
+        slow_attempts = 0  # fast_fail 제외 실제 시도 횟수
+
+        for attempt in range(1, MAX_TOTAL_ATTEMPTS + 1):
             index = self._read_json(self._index_file)
             step_context = self._build_step_context(index)
 
@@ -425,9 +455,9 @@ class StepExecutor:
                     f"반복 에러 요약:\n{prev_error[:500]}\n\n---\n\n"
                 )
 
-            # 이전 실패 이력이 있으면 preamble에 포함 (blocked 복구 후 재시도 시)
+            # 이전 실패 이력이 있으면 모든 attempt에 포함 (blocked 복구 후 재시도 내내 맥락 유지)
             history_section = ""
-            if prior_history and attempt == 1:
+            if prior_history:
                 history_lines = "\n".join(
                     f"  - 시도 {h['attempt']} ({h['timestamp']}): {h['error'][:200]}"
                     for h in prior_history[-3:]  # 최근 3개만
@@ -454,6 +484,8 @@ class StepExecutor:
 
             # 60초 이내 즉시 실패 → 재시도 카운트 미집계 (ADR-015)
             fast_fail = (time.monotonic() - t_start) < 60
+            if not fast_fail:
+                slow_attempts += 1
 
             index = self._read_json(self._index_file)
             status = next((s.get("status", "pending") for s in index["steps"] if s["step"] == step_num), "pending")
@@ -511,13 +543,26 @@ class StepExecutor:
                         s.setdefault("error_history", []).append(history_entry)
                         s.pop("error_message", None)
                 self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
+                # blocked 시에는 깨진 코드를 feat: 커밋하지 않음 — 메타(index.json)만 기록
+                self._commit_step_meta_only(step_num, step_name)
                 print(f"  ⏸ Step {step_num}: blocked (동일 에러 {repeat_count}회) [{elapsed}s]")
                 print(f"    Reason: {err_msg[:200]}")
                 self._update_top_index("blocked")
                 sys.exit(2)
 
-            if attempt < self.MAX_RETRIES:
+            # MAX_RETRIES(느린 실패 기준) 초과 시 error 종료
+            if slow_attempts >= self.MAX_RETRIES:
+                for s in index["steps"]:
+                    if s["step"] == step_num:
+                        s["status"] = "error"
+                        s["error_message"] = f"[{self.MAX_RETRIES}회 시도 후 실패] {err_msg}"
+                        s["failed_at"] = ts
+                self._write_json(self._index_file, index)
+                self._commit_step_meta_only(step_num, step_name)
+                print(f"  ✗ Step {step_num}: {step_name} failed after {self.MAX_RETRIES} attempts [{elapsed}s]")
+                print(f"    Error: {err_msg}")
+                self._update_top_index("error")
+            else:
                 for s in index["steps"]:
                     if s["step"] == step_num:
                         s["status"] = "pending"
@@ -525,18 +570,7 @@ class StepExecutor:
                 self._write_json(self._index_file, index)
                 prev_error = err_msg
                 fast_tag = " [fast-fail, 카운트 미집계]" if fast_fail else ""
-                print(f"  ↻ Step {step_num}: retry {attempt}/{self.MAX_RETRIES} — {err_msg}{fast_tag}")
-            else:
-                for s in index["steps"]:
-                    if s["step"] == step_num:
-                        s["status"] = "error"
-                        s["error_message"] = f"[{self.MAX_RETRIES}회 시도 후 실패] {err_msg}"
-                        s["failed_at"] = ts
-                self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
-                print(f"  ✗ Step {step_num}: {step_name} failed after {self.MAX_RETRIES} attempts [{elapsed}s]")
-                print(f"    Error: {err_msg}")
-                self._update_top_index("error")
+                print(f"  ↻ Step {step_num}: retry {attempt}/{MAX_TOTAL_ATTEMPTS} — {err_msg}{fast_tag}")
                 sys.exit(1)
 
         return False  # unreachable

@@ -134,14 +134,22 @@ class StepExecutor:
 
         print(f"  Branch: {branch}")
 
+    def _has_head(self) -> bool:
+        """HEAD가 존재하는지 (= 첫 커밋이 있는지) 확인."""
+        return self._run_git("rev-parse", "--verify", "HEAD").returncode == 0
+
     def _commit_step(self, step_num: int, step_name: str):
-        """2단계 커밋: feat(코드) + chore(메타). 코드 커밋 실패 시 chore는 건너뜀 (ADR-008)."""
-        output_rel = f"phases/{self._phase_dir_name}/step{step_num}-output.json"
+        """2단계 커밋: feat(코드) + chore(메타). 코드 커밋 실패 시 chore는 건너뜀 (ADR-008).
+
+        output.json은 .gitignore(phases/**/step*-output.json)로 제외되므로
+        chore 커밋엔 index.json만 들어간다. 일관성을 위해 reset/add도 index.json만 명시.
+        """
         index_rel = f"phases/{self._phase_dir_name}/index.json"
 
         self._run_git("add", "-A")
-        self._run_git("reset", "HEAD", "--", output_rel)
-        self._run_git("reset", "HEAD", "--", index_rel)
+        # HEAD가 없는 첫 커밋 단계에서는 reset이 의미 없거나 실패 — 가드
+        if self._has_head():
+            self._run_git("reset", "HEAD", "--", index_rel)
 
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
             msg = self.FEAT_MSG.format(phase=self._phase_name, num=step_num, name=step_name)
@@ -153,8 +161,8 @@ class StepExecutor:
                 # 코드 커밋 실패 시 chore 커밋도 건너뜀 — 혼합 커밋 방지 (ADR-008)
                 return
 
-        # chore 커밋: output.json + index.json 명시적 add (코드 변경 재포함 방지)
-        self._run_git("add", "--", output_rel, index_rel)
+        # chore 커밋: index.json만 명시적 add
+        self._run_git("add", "--", index_rel)
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
             msg = self.CHORE_MSG.format(phase=self._phase_name, num=step_num)
             r = self._run_git("commit", "-m", msg)
@@ -164,8 +172,7 @@ class StepExecutor:
     def _commit_step_meta_only(self, step_num: int, step_name: str):
         """blocked/error 상태에서 index.json만 chore 커밋. 깨진 코드를 feat:로 커밋하지 않는다."""
         index_rel = f"phases/{self._phase_dir_name}/index.json"
-        output_rel = f"phases/{self._phase_dir_name}/step{step_num}-output.json"
-        self._run_git("add", "--", index_rel, output_rel)
+        self._run_git("add", "--", index_rel)
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
             msg = self.CHORE_MSG.format(phase=self._phase_name, num=step_num)
             r = self._run_git("commit", "-m", msg)
@@ -196,17 +203,20 @@ class StepExecutor:
         sections = []
         claude_md = project_root / "CLAUDE.md"
         if claude_md.exists():
-            text = claude_md.read_text()
+            text = claude_md.read_text(encoding="utf-8")
             self._validate_no_placeholders(claude_md, text)
             sections.append(f"## 프로젝트 규칙 (CLAUDE.md)\n\n{text}")
         docs_dir = project_root / "docs"
         if docs_dir.is_dir():
             for doc in sorted(docs_dir.glob("*.md")):
-                sections.append(f"## {doc.stem}\n\n{doc.read_text()}")
+                sections.append(f"## {doc.stem}\n\n{doc.read_text(encoding='utf-8')}")
         # decisions.md가 있으면 가드레일에 포함 (harness B단계 기록)
         decisions_file = self._phases_dir / "decisions.md"
         if decisions_file.exists():
-            sections.append(f"## 프로젝트 결정 사항 (decisions.md)\n\n{decisions_file.read_text()}")
+            sections.append(
+                f"## 프로젝트 결정 사항 (decisions.md)\n\n"
+                f"{decisions_file.read_text(encoding='utf-8')}"
+            )
         return "\n\n---\n\n".join(sections) if sections else ""
 
     @staticmethod
@@ -296,7 +306,7 @@ class StepExecutor:
     @staticmethod
     def _lint_step_file(path: Path) -> list[str]:
         """step.md의 자기완결성을 검사한다. 외부 참조나 필수 섹션 누락을 경고."""
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         warnings = []
         # 외부 참조 패턴 탐지 (독립 세션에서 실행되므로 외부 참조 금지)
         forbidden_phrases = ["이전 대화", "아까 논의", "앞서 말한", "논의했듯이",
@@ -319,14 +329,7 @@ class StepExecutor:
             print(f"  ERROR: {step_file} not found")
             sys.exit(1)
 
-        # step.md 자기완결성 lint
-        lint_warnings = self._lint_step_file(step_file)
-        if lint_warnings:
-            print(f"  ⚠ Step {step_num} ({step_name}) lint 경고:")
-            for w in lint_warnings:
-                print(f"    - {w}")
-
-        prompt = preamble + step_file.read_text()
+        prompt = preamble + step_file.read_text(encoding="utf-8")
         try:
             result = subprocess.run(
                 ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
@@ -335,13 +338,22 @@ class StepExecutor:
         except subprocess.TimeoutExpired:
             timeout_msg = "claude CLI 1800초(30분) 타임아웃 초과. step 범위가 너무 크거나 응답 없음."
             print(f"\n  ERROR: {timeout_msg}")
+            # index.json에 error_message로 기록 — _execute_single_step의 prev_error/fingerprint 추적 유지
+            try:
+                idx = self._read_json(self._index_file)
+                for s in idx["steps"]:
+                    if s["step"] == step_num:
+                        s["error_message"] = timeout_msg
+                self._write_json(self._index_file, idx)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
             output = {
                 "step": step_num, "name": step_name,
                 "exitCode": -1,
                 "stdout": "", "stderr": timeout_msg,
             }
             out_path = self._phase_dir / f"step{step_num}-output.json"
-            with open(out_path, "w") as f:
+            with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
             return output
 
@@ -356,7 +368,7 @@ class StepExecutor:
             "stdout": result.stdout, "stderr": result.stderr,
         }
         out_path = self._phase_dir / f"step{step_num}-output.json"
-        with open(out_path, "w") as f:
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
 
         return output
@@ -427,6 +439,15 @@ class StepExecutor:
         prev_error: Optional[str] = None
         prev_fingerprint: Optional[str] = None
         repeat_count = 0  # fast_fail 제외한 동일 에러 연속 횟수
+
+        # step.md 자기완결성 lint — attempt 루프 진입 전 1회만 (retry마다 반복 출력 방지)
+        step_file = self._phase_dir / f"step{step_num}.md"
+        if step_file.exists():
+            lint_warnings = self._lint_step_file(step_file)
+            if lint_warnings:
+                print(f"  ⚠ Step {step_num} ({step_name}) lint 경고:")
+                for w in lint_warnings:
+                    print(f"    - {w}")
 
         # blocked 복구 시 에러 history를 프롬프트에 전달
         existing_step = next((s for s in self._read_json(self._index_file)["steps"] if s["step"] == step_num), {})
@@ -562,18 +583,32 @@ class StepExecutor:
                 print(f"  ✗ Step {step_num}: {step_name} failed after {self.MAX_RETRIES} attempts [{elapsed}s]")
                 print(f"    Error: {err_msg}")
                 self._update_top_index("error")
-            else:
-                for s in index["steps"]:
-                    if s["step"] == step_num:
-                        s["status"] = "pending"
-                        s.pop("error_message", None)
-                self._write_json(self._index_file, index)
-                prev_error = err_msg
-                fast_tag = " [fast-fail, 카운트 미집계]" if fast_fail else ""
-                print(f"  ↻ Step {step_num}: retry {attempt}/{MAX_TOTAL_ATTEMPTS} — {err_msg}{fast_tag}")
                 sys.exit(1)
 
-        return False  # unreachable
+            # 재시도 — 다음 attempt iteration으로 진행 (sys.exit 금지: retry 자체가 무력화됨)
+            for s in index["steps"]:
+                if s["step"] == step_num:
+                    s["status"] = "pending"
+                    s.pop("error_message", None)
+            self._write_json(self._index_file, index)
+            prev_error = err_msg
+            fast_tag = " [fast-fail, 카운트 미집계]" if fast_fail else ""
+            print(f"  ↻ Step {step_num}: retry {attempt}/{MAX_TOTAL_ATTEMPTS} — {err_msg}{fast_tag}")
+
+        # MAX_TOTAL_ATTEMPTS 초과 — fast_fail만 누적되어 slow_attempts가 한계에 못 미친 케이스
+        for s in index["steps"]:
+            if s["step"] == step_num:
+                s["status"] = "error"
+                s["error_message"] = (
+                    f"[{MAX_TOTAL_ATTEMPTS}회 attempt 후에도 진전 없음 — fast_fail 반복] "
+                    f"{prev_error or 'no error captured'}"
+                )
+                s["failed_at"] = self._stamp()
+        self._write_json(self._index_file, index)
+        self._commit_step_meta_only(step_num, step_name)
+        print(f"  ✗ Step {step_num}: {step_name} exhausted {MAX_TOTAL_ATTEMPTS} attempts (fast_fail loop)")
+        self._update_top_index("error")
+        sys.exit(1)
 
     def _execute_all_steps(self, guardrails: str):
         while True:

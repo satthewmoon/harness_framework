@@ -816,3 +816,262 @@ class TestNormalizeError:
         msg1 = "Error: /tmp/run-abc/test.py not found"
         msg2 = "Error: /tmp/run-xyz/test.py not found"
         assert ex.StepExecutor._normalize_error(msg1) == ex.StepExecutor._normalize_error(msg2)
+
+
+# ---------------------------------------------------------------------------
+# _execute_single_step — retry 분기 회귀 테스트
+# ---------------------------------------------------------------------------
+
+class TestExecuteSingleStepRetry:
+    """ADR-015 retry 정책 회귀 방지.
+
+    과거 버그(2026-04 발견): if/else의 sys.exit 위치가 뒤바뀌어 첫 실패 시 즉시 종료,
+    retry 카운트가 무력화. 이 클래스는 그 회귀를 차단한다.
+    """
+
+    def _setup_executor(self, tmp_project, phase_dir):
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        inst._phases_dir = tmp_project / "phases"
+        inst._phase_dir = phase_dir
+        inst._phase_dir_name = "0-mvp"
+        inst._index_file = phase_dir / "index.json"
+        inst._top_index_file = tmp_project / "phases" / "index.json"
+        inst._phase_name = "mvp"
+        inst._project = "Test"
+        inst._total = 3
+        # git 호출은 항상 성공 (returncode=0 → diff --cached가 변경 없음을 의미해 commit skip)
+        inst._run_git = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
+        return inst
+
+    @staticmethod
+    def _patch_monotonic(monkeypatch, *, fast: bool):
+        """time.monotonic을 단조 증가 mock으로 교체. fast=False면 매 호출 100초씩 증가 (fast_fail 회피)."""
+        counter = {"t": 0.0}
+        delta = 0.1 if fast else 100.0
+        def fake_monotonic():
+            counter["t"] += delta
+            return counter["t"]
+        monkeypatch.setattr(ex.time, "monotonic", fake_monotonic)
+
+    def test_first_failure_does_not_exit(self, tmp_project, phase_dir, monkeypatch):
+        """회귀 핵심: 첫 attempt 실패 시 즉시 sys.exit(1) 하면 안 된다 — 재시도가 일어나야 함."""
+        inst = self._setup_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui"}
+
+        invoke_calls = {"n": 0}
+        def fake_invoke(s, p):
+            invoke_calls["n"] += 1
+            idx = ex.StepExecutor._read_json(inst._index_file)
+            for st in idx["steps"]:
+                if st["step"] == 2:
+                    if invoke_calls["n"] == 1:
+                        st["status"] = "error"
+                        st["error_message"] = "first failure"
+                    else:
+                        st["status"] = "completed"
+                        st["summary"] = "succeeded on retry"
+            ex.StepExecutor._write_json(inst._index_file, idx)
+            return {}
+
+        inst._invoke_claude = fake_invoke
+        self._patch_monotonic(monkeypatch, fast=False)
+
+        result = inst._execute_single_step(step, "")
+        assert invoke_calls["n"] == 2, "retry가 동작하지 않음 (회귀)"
+        assert result is True
+
+    def test_max_retries_exits_with_code_1(self, tmp_project, phase_dir, monkeypatch):
+        """MAX_RETRIES 초과 시 status=error로 마킹하고 sys.exit(1)."""
+        inst = self._setup_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui"}
+
+        # 매번 다른 fingerprint를 만들어 동일에러 3회(blocked) 분기를 회피
+        invoke_calls = {"n": 0}
+        def fake_invoke(s, p):
+            invoke_calls["n"] += 1
+            idx = ex.StepExecutor._read_json(inst._index_file)
+            for st in idx["steps"]:
+                if st["step"] == 2:
+                    st["status"] = "error"
+                    st["error_message"] = f"unique error #{invoke_calls['n']}"
+            ex.StepExecutor._write_json(inst._index_file, idx)
+            return {}
+        inst._invoke_claude = fake_invoke
+        self._patch_monotonic(monkeypatch, fast=False)
+
+        with pytest.raises(SystemExit) as exc:
+            inst._execute_single_step(step, "")
+        assert exc.value.code == 1
+        # MAX_RETRIES=3 도달 후 종료 (retry당 invoke 1회)
+        assert invoke_calls["n"] == ex.StepExecutor.MAX_RETRIES
+
+        # index.json이 error로 최종 마킹됐는지
+        idx = ex.StepExecutor._read_json(inst._index_file)
+        ui_step = next(s for s in idx["steps"] if s["step"] == 2)
+        assert ui_step["status"] == "error"
+        assert "3회 시도 후 실패" in ui_step["error_message"]
+
+    def test_same_error_3x_blocks_with_exit_2(self, tmp_project, phase_dir, monkeypatch):
+        """동일 에러 fingerprint 3회 → status=blocked + sys.exit(2) (ADR-015)."""
+        inst = self._setup_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui"}
+
+        def fake_invoke(s, p):
+            idx = ex.StepExecutor._read_json(inst._index_file)
+            for st in idx["steps"]:
+                if st["step"] == 2:
+                    st["status"] = "error"
+                    st["error_message"] = "ModuleNotFoundError: No module named 'foo'"
+            ex.StepExecutor._write_json(inst._index_file, idx)
+            return {}
+        inst._invoke_claude = fake_invoke
+        self._patch_monotonic(monkeypatch, fast=False)
+
+        with pytest.raises(SystemExit) as exc:
+            inst._execute_single_step(step, "")
+        assert exc.value.code == 2
+
+        idx = ex.StepExecutor._read_json(inst._index_file)
+        ui_step = next(s for s in idx["steps"] if s["step"] == 2)
+        assert ui_step["status"] == "blocked"
+        assert "동일 에러" in ui_step["blocked_reason"]
+
+    def test_blocked_status_from_claude_exits_2(self, tmp_project, phase_dir, monkeypatch):
+        """Claude가 직접 status=blocked로 마킹하면 즉시 sys.exit(2)."""
+        inst = self._setup_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui"}
+
+        def fake_invoke(s, p):
+            idx = ex.StepExecutor._read_json(inst._index_file)
+            for st in idx["steps"]:
+                if st["step"] == 2:
+                    st["status"] = "blocked"
+                    st["blocked_reason"] = "API key needed"
+            ex.StepExecutor._write_json(inst._index_file, idx)
+            return {}
+        inst._invoke_claude = fake_invoke
+        self._patch_monotonic(monkeypatch, fast=False)
+
+        with pytest.raises(SystemExit) as exc:
+            inst._execute_single_step(step, "")
+        assert exc.value.code == 2
+
+    def test_completed_first_try_returns_true(self, tmp_project, phase_dir, monkeypatch):
+        """첫 시도에 completed면 retry 없이 True 반환."""
+        inst = self._setup_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui"}
+
+        invoke_calls = {"n": 0}
+        def fake_invoke(s, p):
+            invoke_calls["n"] += 1
+            idx = ex.StepExecutor._read_json(inst._index_file)
+            for st in idx["steps"]:
+                if st["step"] == 2:
+                    st["status"] = "completed"
+                    st["summary"] = "done"
+            ex.StepExecutor._write_json(inst._index_file, idx)
+            return {}
+        inst._invoke_claude = fake_invoke
+        self._patch_monotonic(monkeypatch, fast=False)
+
+        result = inst._execute_single_step(step, "")
+        assert invoke_calls["n"] == 1
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
+# _commit_step — chore 커밋 일관성 회귀 (output.json은 명시적 add 대상에서 제외됨)
+# ---------------------------------------------------------------------------
+
+class TestCommitStepIndexOnly:
+    def test_chore_commit_adds_only_index(self, executor):
+        """output.json은 .gitignore 처리되므로 chore 단계에서 명시적 add하지 않는다."""
+        calls = []
+        def fake_git(*args):
+            calls.append(args)
+            if args[:2] == ("diff", "--cached"):
+                return MagicMock(returncode=1)
+            if args[:2] == ("rev-parse", "--verify"):
+                return MagicMock(returncode=0)  # HEAD 존재
+            return MagicMock(returncode=0, stdout="", stderr="")
+        executor._run_git = fake_git
+
+        executor._commit_step(2, "ui")
+
+        # 명시적 add는 index.json만 — output.json이 인자에 들어가면 안 됨
+        explicit_add = [c for c in calls if c[0] == "add" and "--" in c]
+        for c in explicit_add:
+            joined = " ".join(c)
+            assert "step2-output.json" not in joined, f"output.json이 명시적 add에 포함됨: {c}"
+
+    def test_meta_only_skips_output(self, executor):
+        """_commit_step_meta_only도 output.json을 명시 add하지 않는다."""
+        calls = []
+        def fake_git(*args):
+            calls.append(args)
+            if args[:2] == ("diff", "--cached"):
+                return MagicMock(returncode=1)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        executor._run_git = fake_git
+
+        executor._commit_step_meta_only(2, "ui")
+
+        explicit_add = [c for c in calls if c[0] == "add" and "--" in c]
+        for c in explicit_add:
+            joined = " ".join(c)
+            assert "step2-output.json" not in joined
+
+    def test_no_head_skips_reset(self, executor):
+        """첫 커밋 전(HEAD 없음)에는 reset HEAD를 호출하지 않는다."""
+        calls = []
+        def fake_git(*args):
+            calls.append(args)
+            if args[:2] == ("rev-parse", "--verify"):
+                return MagicMock(returncode=128)  # HEAD 없음
+            if args[:2] == ("diff", "--cached"):
+                return MagicMock(returncode=0)  # 변경 없음 → commit 스킵
+            return MagicMock(returncode=0, stdout="", stderr="")
+        executor._run_git = fake_git
+
+        executor._commit_step(2, "ui")
+
+        reset_calls = [c for c in calls if c[0] == "reset"]
+        assert reset_calls == [], "HEAD가 없는데 reset이 호출됨"
+
+
+# ---------------------------------------------------------------------------
+# _invoke_claude — 타임아웃 시 prev_error 추적을 위한 index.json 갱신
+# ---------------------------------------------------------------------------
+
+class TestInvokeClaudeTimeoutRecordsError:
+    def _make_executor(self, tmp_project, phase_dir):
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor.__new__(ex.StepExecutor)
+        inst._root = str(tmp_project)
+        inst._phases_dir = tmp_project / "phases"
+        inst._phase_dir = phase_dir
+        inst._phase_dir_name = "0-mvp"
+        inst._index_file = phase_dir / "index.json"
+        inst._top_index_file = tmp_project / "phases" / "index.json"
+        inst._phase_name = "mvp"
+        inst._project = "Test"
+        inst._total = 3
+        return inst
+
+    def test_timeout_records_error_message_in_index(self, tmp_project, phase_dir):
+        """타임아웃 발생 시 index.json의 해당 step에 error_message가 기록되어야 한다."""
+        (phase_dir / "step2.md").write_text(
+            "## 작업\n\n구현\n\n## Acceptance Criteria\n\npytest\n"
+        )
+        inst = self._make_executor(tmp_project, phase_dir)
+        step = {"step": 2, "name": "ui", "status": "pending"}
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 1800)):
+            inst._invoke_claude(step, "preamble")
+
+        idx = ex.StepExecutor._read_json(inst._index_file)
+        ui_step = next(s for s in idx["steps"] if s["step"] == 2)
+        assert "error_message" in ui_step
+        assert "타임아웃" in ui_step["error_message"]

@@ -41,9 +41,13 @@ case "$FILE_PATH" in
         ;;
     # 문서·설정·메타 파일
     *.md|*.txt|*.json|*.yaml|*.yml|*.toml|*.cfg|*.ini|\
-    *.gitignore|*requirements*.txt|*Makefile|*CMakeLists.txt|\
+    *requirements*.txt|*Makefile|*CMakeLists.txt|\
     *.clang-format|*.clang-tidy|*pyproject.toml|\
     */phases/*|*/.claude/*|*/.planning/*|*/docs/*|*/scripts/hooks/*)
+        exit 0
+        ;;
+    # .gitignore 자체 — `*.gitignore` 글롭이 매칭하지 못하므로 별도 분기
+    .gitignore|*/.gitignore)
         exit 0
         ;;
     # .env 파일 정확히 (예: .env, .env.local, .env.prod — 단 .environment.py는 제외)

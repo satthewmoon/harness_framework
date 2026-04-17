@@ -47,11 +47,10 @@ DANGEROUS_PATTERNS=(
     'git[[:space:]]+clean[[:space:]]+-[fdxX]'
     'git[[:space:]]+branch[[:space:]]+-[Dd][[:space:]]+main'
     'git[[:space:]]+branch[[:space:]]+-[Dd][[:space:]]+master'
-    # DB 파괴 명령어
-    'DROP[[:space:]]+TABLE'
+    # DB 파괴 명령어 — 데이터베이스/스키마 단위만 차단 (DROP TABLE/TRUNCATE는 마이그레이션·테스트
+    # 픽스처에서 정상적으로 사용되므로 차단하지 않는다. ADR-010이 "Step 0: DB 스키마"를 권장)
     'DROP[[:space:]]+DATABASE'
     'DROP[[:space:]]+SCHEMA'
-    'TRUNCATE[[:space:]]+TABLE'
     # 파일 시스템 파괴
     'mkfs\.'
     'dd[[:space:]]+.*of=/dev/[sh]d'

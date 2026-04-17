@@ -198,10 +198,24 @@ if [ "$IS_PYTHON" = true ]; then
     echo "▶ Python 검사"
 
     # ─── 하드코딩된 시크릿 스캔 (C1, required) ───
-    # tests/ 폴더는 mock 값이 많아 오탐이 크므로 제외
-    if [ -d "src" ]; then
+    # tests/ 폴더는 mock 값이 많아 오탐이 크므로 제외.
+    # src/ 가 없는 단일 파일 프로젝트(예: main.py만 있는 CLI)도 검사하도록 루트 .py 포함.
+    SECRET_SCAN_TARGETS=()
+    [ -d "src" ] && SECRET_SCAN_TARGETS+=("src")
+    if [ -z "${SECRET_SCAN_TARGETS[0]:-}" ]; then
+        # 루트 .py 파일을 직접 대상으로 (venv·tests·node_modules 등은 자연 제외)
+        ROOT_PY_FILES=()
+        while IFS= read -r f; do
+            [ -n "$f" ] && ROOT_PY_FILES+=("$f")
+        done < <(find . -maxdepth 1 -name '*.py' 2>/dev/null)
+        if [ "${#ROOT_PY_FILES[@]}" -gt 0 ]; then
+            SECRET_SCAN_TARGETS=("${ROOT_PY_FILES[@]}")
+        fi
+    fi
+
+    if [ "${#SECRET_SCAN_TARGETS[@]}" -gt 0 ]; then
         SECRET_PATTERN='(api_key|password|token|secret|passwd)[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"']{6,}'
-        SECRET_HITS="$(grep -rnE --include='*.py' "$SECRET_PATTERN" src/ 2>/dev/null \
+        SECRET_HITS="$(grep -rnE --include='*.py' "$SECRET_PATTERN" "${SECRET_SCAN_TARGETS[@]}" 2>/dev/null \
             | grep -vE '(os\.getenv|os\.environ|getenv\(|config\.|settings\.|Field\(|#[[:space:]]*nosec)' \
             | grep -vE '(Form\(|Query\(|Body\(|Header\(|Depends\(|request\.|\.headers\.|\.get\(|\.decode\(|jwt\.|hashlib\.|Annotated\[)' \
             | grep -vE '/tests?/' \
@@ -209,7 +223,7 @@ if [ "$IS_PYTHON" = true ]; then
         if [ -n "$SECRET_HITS" ]; then
             echo "  ✗ 하드코딩된 시크릿 감지 [FAIL]"
             record_error "하드코딩된 시크릿 (C1 위반)" \
-                "src/에서 시크릿처럼 보이는 값을 발견했습니다. .env로 외부화하세요:" \
+                "시크릿처럼 보이는 값을 발견했습니다. .env로 외부화하세요:" \
                 "$SECRET_HITS" \
                 "" \
                 "허용 패턴: os.getenv('API_KEY'), config.api_key 등"
@@ -400,9 +414,9 @@ if [ "$IS_CPP" = true ]; then
     echo ""
     echo "▶ C/C++ 검사"
 
-    # clang-format 포맷 체크
+    # clang-format 포맷 체크 — 모든 C/C++ 소스 파일 대상 (head -50 제거: 51번째 이후 누락 방지)
     if tool_check "clang-format"; then
-        SRC_FILES="$(find src -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) 2>/dev/null | head -50)"
+        SRC_FILES="$(find src -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) 2>/dev/null)"
         if [ -n "$SRC_FILES" ]; then
             FORMAT_ISSUES=""
             while IFS= read -r file; do

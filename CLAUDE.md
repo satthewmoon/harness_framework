@@ -71,22 +71,7 @@
 - CRITICAL: 하나의 커밋 = 하나의 목적. 미완성 코드 커밋 금지.
 - CRITICAL: Phase 완료 후 원자적 커밋 1개로 정리한다.
 
-### C7. 프로젝트 특화 규칙 (새 프로젝트 시작 시 작성)
-- CRITICAL: {프로젝트 고유의 절대 규칙 — 없으면 이 섹션 삭제}
-
-### C7b. Step별 AC(Acceptance Criteria) 차등화
-- CRITICAL: 커버리지 검증(`pytest --cov-fail-under=70`)은 **Tests step에서만** required다. 그 외 step(DB 스키마, Backend Core, Server 레이어, Frontend)에서는 `ruff check .` + 해당 step 기능 동작 확인까지만 요구한다.
-- CRITICAL: 이유: DB 스키마 step에서 억지로 70% 커버리지를 맞추려 하면 무의미한 테스트가 생성된다. 커버리지는 Tests step에서 전체를 통과하면 된다.
-- CRITICAL: Tests step이 아닌 step의 표준 AC: `ruff check . && python -c "from src.{모듈} import *"` (임포트 오류 없음 확인)
-- CRITICAL: Tests step의 표준 AC: `pytest --cov=src --cov-fail-under=70 && ruff check .`
-
-### C9. GSD + harness 역할 분리
-- CRITICAL: harness는 **인프라 셋업 전담** — docs/, CLAUDE.md, .gitignore, .env.example 생성까지만.
-- CRITICAL: Phase 실행·상태 관리는 `/gsd:execute-phase`가 담당한다. harness가 직접 코드를 생성하거나 Phase를 실행하지 않는다.
-- CRITICAL: harness가 생성한 `docs/PRD.md`는 GSD의 `.planning/ROADMAP.md`와 연계된다. `/gsd:new-project` 또는 `/gsd:plan-phase` 실행 시 docs/PRD.md를 입력 자료로 활용한다.
-- CRITICAL: `/gsd:verify-work`로 UAT를 통과해야 GSD Phase를 완료로 처리한다.
-
-### C8. 테스트 완결성 및 회귀 방지
+### C5. 테스트 완결성 및 회귀 방지
 - CRITICAL: 비즈니스 로직이 있는 모든 함수는 단위 테스트를 가져야 한다. 단순 getter/setter 제외.
 - CRITICAL: 외부 경계(DB, HTTP API, 파일 I/O)는 통합 테스트를 가져야 한다.
 - CRITICAL: 새 step 완료 전 반드시 **전체** 테스트 스위트를 실행한다. 새 테스트만이 아닌 기존 테스트 전부. 회귀 방지는 이 단계에서 결정된다.
@@ -99,6 +84,21 @@
   - 예: `test_fetch_items_api_timeout_retries_three_times`
 - CRITICAL: 테스트 간 독립성 유지. 실행 순서 의존 금지. 공유 상태는 `conftest.py` fixture로 매 테스트 전 초기화.
 - CRITICAL: 경계값 테스트 의무 — None, 빈 문자열, 빈 리스트, 최대값, 최소값, 0, 음수. PRD 섹션 7의 엣지 케이스가 기준.
+
+### C6. GSD + harness 역할 분리
+- CRITICAL: harness는 **인프라 셋업 전담** — docs/, CLAUDE.md, .gitignore, .env.example 생성까지만.
+- CRITICAL: Phase 실행·상태 관리는 `/gsd:execute-phase`가 담당한다. harness가 직접 코드를 생성하거나 Phase를 실행하지 않는다.
+- CRITICAL: harness가 생성한 `docs/PRD.md`는 GSD의 `.planning/ROADMAP.md`와 연계된다. `/gsd:new-project` 또는 `/gsd:plan-phase` 실행 시 docs/PRD.md를 입력 자료로 활용한다.
+- CRITICAL: `/gsd:verify-work`로 UAT를 통과해야 GSD Phase를 완료로 처리한다.
+
+### C7. 프로젝트 특화 규칙 (새 프로젝트 시작 시 작성)
+- CRITICAL: {프로젝트 고유의 절대 규칙 — 없으면 이 섹션 삭제}
+
+### C7b. Step별 AC(Acceptance Criteria) 차등화
+- CRITICAL: 커버리지 검증(`pytest --cov-fail-under=70`)은 **Tests step에서만** required다. 그 외 step(DB 스키마, Backend Core, Server 레이어, Frontend)에서는 `ruff check .` + 해당 step 기능 동작 확인까지만 요구한다.
+- CRITICAL: 이유: DB 스키마 step에서 억지로 70% 커버리지를 맞추려 하면 무의미한 테스트가 생성된다. 커버리지는 Tests step에서 전체를 통과하면 된다.
+- CRITICAL: Tests step이 아닌 step의 표준 AC: `ruff check . && python -c "from src.{모듈} import *"` (임포트 오류 없음 확인)
+- CRITICAL: Tests step의 표준 AC: `pytest --cov=src --cov-fail-under=70 && ruff check .`
 
 ---
 

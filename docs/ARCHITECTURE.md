@@ -20,8 +20,8 @@
 ### 왜 venv가 필수인가
 
 - 시스템 Python에 패키지를 쌓으면 프로젝트 간 의존성 충돌이 반드시 발생한다.
-- `execute.py`가 headless Claude 세션을 반복 생성하므로, 재현 가능한 환경이 없으면 "내 로컬에서는 되던데" 문제가 대량 발생한다.
-- venv 없이 `ModuleNotFoundError`가 반복되면 SW In the Loop의 blocked 조건에 해당해 비용 낭비로 이어진다.
+- `/gsd:execute-phase`가 각 Phase step을 독립 Claude 세션으로 실행하므로, 재현 가능한 환경이 없으면 "내 로컬에서는 되던데" 문제가 반복된다.
+- venv 없이 `ModuleNotFoundError`가 반복되면 Phase 실행이 blocked 상태로 전환돼 비용 낭비로 이어진다.
 
 ### Lifecycle 다이어그램
 
@@ -92,27 +92,15 @@ dist/
 | 단일 서버 직접 배포 | venv 필수. systemd `ExecStart`에 `/app/venv/bin/python main.py` 절대경로 사용. |
 | 서버리스 (Lambda/Cloud Functions) | requirements.txt를 layer/deployment package에 포함. venv 불필요. |
 
-### execute.py와 venv의 관계
-
-- `execute.py` 자체는 venv 독립적 (표준 라이브러리만 사용).
-- 하지만 execute.py가 생성한 Claude 세션이 `pytest`, `ruff`, `python main.py`를 실행할 때 **반드시 venv 활성화 상태여야** 한다.
-- **권장 실행**:
-  ```bash
-  cd /coding/projects/{프로젝트명}
-  source venv/bin/activate
-  python3 scripts/execute.py 0-mvp
-  ```
-- venv 미활성화 시 발생하는 `ModuleNotFoundError`는 CLAUDE.md C6a의 "동일 에러 반복" 조건에 해당 → 3회 후 blocked 전환.
-
 ---
 
-## 서브에이전트 실행 경계
+## Phase 설계 가이드라인 (/gsd:plan-phase에서 참고)
 
-> `execute.py`는 각 step을 완전히 독립된 Claude 인스턴스로 **순차** 실행한다 (병렬 아님).
-> step 간 유일한 통신 수단은 `index.json`의 `summary` 필드다.
-> **따라서 각 step은 반드시 명확한 인터페이스(파일, 스키마, API 스펙)를 산출해야 한다.**
+> `/gsd:execute-phase`가 각 Phase의 step을 독립 Claude 세션으로 **순차** 실행한다.
+> 실행 전 반드시 venv 활성화: `source venv/bin/activate`
+> step 간 인터페이스(파일·스키마·API 스펙)를 명확히 정의해야 다음 step이 독립적으로 실행 가능하다.
 
-### 권장 step 분리 패턴 (ADR-010)
+### 권장 Phase step 분리 패턴
 
 **패턴 A — CLI / 스크립트**
 ```
@@ -681,62 +669,3 @@ def mask_secret(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 ```
 
----
-
-## SW In the Loop 디버깅 타임아웃 전략
-
-> `execute.py`가 Claude를 `claude -p --dangerously-skip-permissions`로 호출해 자동화 루프를 돌릴 때 적용된다.
-> 목적: **동일 에러 반복으로 인한 토큰·비용 낭비 방지.**
-
-### 단계별 에스컬레이션
-
-| 단계 | 조건 | 동작 |
-|------|------|------|
-| 1단계 — 재시도 | AC 실패 1회 | 이전 에러 메시지를 preamble에 주입 후 동일 step 재실행 |
-| 2단계 — 전략 변경 | 동일 에러 2회 연속 | preamble에 "**전략 변경 필수**" 경고 주입 + 다른 접근법 시도 목록 제시 |
-| 3단계 — blocked | 동일 에러 3회 연속 | `status: blocked` 전환, `blocked_reason` 기록, 실행 중단, 사용자 개입 대기 |
-| 4단계 — circuit-break | 여러 step 연쇄 실패 | `circuit-breaker.sh`가 `strategy_hint` 필드 기록 + exit 1 |
-
-### 시간 기반 타임아웃 테이블
-
-| 임계값 | 의미 | 반응 |
-|--------|------|------|
-| 60초 이내 즉시 실패 | 환경·설정 문제 가능성 높음 | 재시도 카운트 미집계 (전략 탐색 허용) |
-| 60초 ~ 300초 | 정상 step 실행 구간 | 정상 진행 |
-| 300초 ~ 1800초 | 복잡한 step | 정상 진행 |
-| 1800초 (30분) | subprocess 하드 리밋 | 강제 종료 후 error 기록 |
-| 동일 에러 2회 | 전략 변경 필요 신호 | preamble에 경고 주입 |
-| 동일 에러 3회 | blocked 처리 필요 | 사용자 개입 대기 |
-
-### "동일 에러" 판별 규칙
-
-- 에러 메시지의 **상위 3줄** (stderr 또는 stdout 첫 3줄)을 정규화 후 비교.
-- **정규화 대상**: 경로(`/tmp/xxx/` → `/tmp/X`), 타임스탬프, 프로세스 ID, 여분 공백.
-- 동일하면 "반복 에러" 카운트 증가. 다르면 카운트 리셋.
-
-### 전략 변경 preamble 예시
-
-동일 에러 2회 시 `execute.py`가 다음 내용을 preamble에 추가 주입한다:
-
-```
-## ⚠ 반복 에러 감지 — 전략을 변경하라
-
-이전 2회 시도가 같은 에러로 실패했다. 단순 재시도는 동일 결과를 낳는다.
-다음 중 하나를 반드시 선택하라:
-
-1. 문제 원인을 재분석하라 — 전제가 틀렸을 가능성이 높다.
-2. 다른 라이브러리·API·접근법을 시도하라.
-3. venv 활성화 상태를 확인하라 (ModuleNotFoundError 유형 시).
-4. step 범위가 너무 크면 blocked로 전환하고 사용자에게 step 재설계를 요청하라.
-
-반복 에러 요약: {에러 상위 3줄}
-```
-
-### blocked 해제 절차
-
-1. `phases/{task}/index.json` 열기
-2. 해당 step의 `"status"` → `"pending"` 변경
-3. `"blocked_reason"` 필드 삭제
-4. (선택) `"strategy_hint"`, `"repeat_error_count"` 필드 삭제
-5. 근본 원인 수정 (의존성 설치, step.md 재설계 등)
-6. `source venv/bin/activate && python3 scripts/execute.py {task-name}` 재실행

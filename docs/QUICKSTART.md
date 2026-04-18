@@ -218,62 +218,36 @@ git commit -m "chore: project skeleton"
 
 ---
 
-## 8. Harness 실행
+## 8. Harness 실행 및 다음 단계
 
 ```bash
-# 1. venv 활성화 (매 세션 시작 시 필수)
-source venv/bin/activate
-
-# 2. Claude Code에서 /harness 슬래시 커맨드 실행
-# → AI가 PRD를 읽고 phases/ 폴더에 step 설계를 한다
+# Claude Code에서 /harness 슬래시 커맨드 실행
 /harness
-
-# 3. phases/ 폴더에 생성된 index.json 확인
-# → step 목록, 의존성, acceptance_criteria 검토
-
-# 4. execute.py로 step 실행
-python3 scripts/execute.py {task-name}
-
-# 5. 원격 저장소로 push (선택)
-python3 scripts/execute.py {task-name} --push
 ```
 
-> `{task-name}`은 `phases/` 하위에 생성된 폴더명과 일치해야 한다.
+`/harness`는 **탐색 → 1문1답 논의 → 인프라 셋업(docs/, CLAUDE.md 등) → 위임** 순서로 진행한다.
+실제 구현 코드는 생성하지 않는다.
+
+인프라 셋업 완료 후 아래 명령으로 개발을 시작한다:
+
+```
+Phase 단위 계획 수립  →  /gsd:new-project  또는  /gsd:plan-phase
+기능 개발             →  /feature-dev
+간단한 수정           →  /gsd:fast
+```
 
 ---
 
-## 9. 에러 시 대처
+## 9. 트러블슈팅
 
 | 증상 | 원인 | 해결 방법 |
 |------|------|-----------|
-| `ModuleNotFoundError` | venv 미활성화 | `source venv/bin/activate` 후 재실행 |
-| `status: error` | step 실행 실패 | `phases/{task}/index.json`에서 `error_message` 확인 → 수정 후 재실행 |
-| `status: blocked` | 동일 에러 3회 반복 | 아래 "blocked 해제" 절차 참조 |
-| `ruff check` 실패 | 린트 오류 | `ruff check --fix .` 후 재실행 |
-| `pytest` 실패 | 테스트 실패 | 실패 테스트 로그 확인 → 코드 수정 → 재실행 |
-| circuit-breaker 실패 | 코드 품질 문제 | 출력된 에러 메시지 따라 수정 |
+| `ruff check` 실패 | 린트 오류 | `ruff check --fix .` 실행 |
+| `pytest` 실패 | 테스트 실패 | 실패 테스트 로그 확인 → 코드 수정 |
+| circuit-breaker 실패 | 코드 품질 미달 | 출력된 에러 메시지 따라 수정 |
 | `.env git 추적` 경고 | `.env`가 git에 add됨 | `git rm --cached .env` 실행 |
 | cmake 빌드 실패 | C/C++ 빌드 오류 | `build/` 삭제 후 `cmake -S . -B build` 재실행 |
-
-### blocked 해제 절차
-
-`status: blocked`는 동일 에러가 3회 반복될 때 설정된다. 사용자가 직접 해제해야 한다.
-
-```bash
-# 1. 어떤 에러인지 확인
-cat phases/{task}/index.json | python3 -m json.tool | grep -A5 "blocked"
-
-# 2. 루트 원인 파악 및 코드 수정
-
-# 3. index.json에서 해당 step의 status를 pending으로 되돌리기
-# phases/{task}/index.json 열어서:
-#   "status": "blocked" → "status": "pending"
-#   "blocked_reason": "..." → 이 줄 삭제
-
-# 4. execute.py 재실행
-source venv/bin/activate
-python3 scripts/execute.py {task-name}
-```
+| `/harness`가 코드를 생성함 | Context Rot 발생 | 세션 재시작 후 `/harness` 재실행 |
 
 ---
 

@@ -69,16 +69,17 @@
 - **이유**: /gsd는 세션 관리·Context Rot 방지·Phase 단위 실행에 최적화. /harness는 docs 템플릿·코딩 규칙·품질 훅 제공에 집중. 두 도구는 상호 보완 관계.
 - **트레이드오프**: 두 프레임워크의 개념을 모두 학습해야 함. CLAUDE.md의 워크플로우 표가 가이드 역할.
 
-### ADR-010: 서브에이전트 독립 순차 실행 — DB→Backend Core→Server→Frontend→Test 순서 강제
-- **결정**: harness phase 설계 시 아래 순서로 step을 분리한다. 각 step은 독립 Claude 인스턴스로 **순차** 실행되며(병렬 아님), 앞 step의 산출물을 index.json summary로만 수신한다.
-  - Step 0: DB 스키마 (테이블/모델/마이그레이션)
-  - Step 1: Backend Core (서비스·저장소·도메인 로직)
-  - Step 2: Server 레이어 (API 라우터·미들웨어·진입점) — 웹 서비스인 경우
-  - Step 3: Frontend (UI 컴포넌트·페이지) — 웹 UI가 있는 경우
-  - Step 4: Tests (단위·통합·E2E)
-  - CLI·스크립트처럼 해당 없는 step은 생략. 너무 크면 쪼갠다.
+### ADR-010: Phase 설계 — DB→Backend Core→Server→Frontend→Test 순서 강제 (/gsd:plan-phase에서 적용)
+- **결정**: `/gsd:plan-phase` 실행 시 아래 순서로 Phase를 분리한다. 각 Phase는 독립 Claude 세션으로 순차 실행되며(병렬 아님), 앞 Phase의 산출물을 PLAN.md summary로 수신한다.
+  - Phase 0: DB 스키마 (테이블/모델/마이그레이션)
+  - Phase 1: Backend Core (서비스·저장소·도메인 로직)
+  - Phase 2: Server 레이어 (API 라우터·미들웨어·진입점) — 웹 서비스인 경우
+  - Phase 3: Frontend (UI 컴포넌트·페이지) — 웹 UI가 있는 경우
+  - Phase 4: Tests (단위·통합·E2E)
+  - CLI·스크립트처럼 해당 없는 Phase는 생략. 너무 크면 쪼갠다.
 - **이유**: 인터페이스(스키마, 서비스 시그니처, API 계약)가 확정된 후에야 의존하는 레이어를 구현할 수 있다. Backend Core와 Server 레이어를 분리하면 비즈니스 로직이 HTTP 관심사에 오염되지 않는다. 독립 순차 실행은 Context Rot를 원천 차단하고 재실행 비용을 낮춘다.
-- **트레이드오프**: step 간 직접 코드 공유 불가. summary 필드의 품질이 다음 step 결과에 직접 영향. CLI처럼 Server 레이어가 없으면 Backend Core만으로 충분하므로 5-step이 항상 필요한 것은 아니다.
+- **트레이드오프**: Phase 간 직접 코드 공유 불가. PLAN.md summary 품질이 다음 Phase 결과에 직접 영향. CLI처럼 Server 레이어가 없으면 Backend Core만으로 충분.
+- **변경 이력**: 2026-04-18 execute.py 폐기로 인해 "harness phase 설계" → "/gsd:plan-phase 설계 가이드라인"으로 역할 재정의. 순서 원칙은 동일.
 
 ### ADR-011: 재시도는 지수 백오프, 최대 3회
 - **결정**: 네트워크·외부 API 에러 시 지수 백오프(1초→2초→4초)로 최대 3회 재시도. HTTP 4xx(클라이언트 에러)는 재시도 없음.

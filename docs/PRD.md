@@ -203,50 +203,7 @@ MVP가 완료되었다고 판단하는 체크리스트. 모든 항목을 수동 
 
 ---
 
-## 10. Phase 분리 가이드라인
-
-> `/harness` 실행 시 아래 경계로 step을 분리한다.
-> 각 step은 독립 서브에이전트가 **순차** 실행하며(병렬 아님), 이전 step의 결과는 summary로만 전달된다.
-
-**패턴 A — CLI / 스크립트 (DB·Frontend 없음)**
-```
-Step 0 — 핵심 로직 + 프로젝트 설정
-Step 1 — Tests
-```
-
-**패턴 B — 백엔드 API (웹 서비스, Frontend 없음)**
-```
-Step 0 — DB 스키마 (있는 경우)
-  작업: 섹션 8의 데이터 모델을 실제 코드로 구현
-  산출물: models.py / schema.sql / migration
-
-Step 1 — Backend Core (비즈니스 로직)
-  작업: 서비스·저장소·도메인 로직 구현 (HTTP 관심사 없음)
-  선행: Step 0 완료 (스키마 확정)
-
-Step 2 — Server 레이어 (API 라우터·미들웨어·진입점)
-  작업: 라우터 마운트, 미들웨어, CORS, 인증, main.py
-  선행: Step 1 완료 (서비스 인터페이스 확정)
-
-Step 3 — Tests
-  작업: 섹션 7의 에러 케이스를 포함한 테스트 작성
-  선행: Step 0~2 완료
-  Acceptance Criteria: pytest && ruff check .
-```
-
-**패턴 C — 풀스택 (Frontend 포함)**
-```
-Step 0 — DB 스키마
-Step 1 — Backend Core
-Step 2 — Server 레이어
-Step 3 — Frontend (UI 컴포넌트·페이지)
-  선행: Step 2 완료 (API 계약 확정)
-Step 4 — Tests
-```
-
----
-
-## 11. 향후 확장 (v2 — 지금 만들지 않음)
+## 10. 향후 확장 (v2 — 지금 만들지 않음)
 
 > 미래 기능. 현재 MVP에 영향 없음. AI가 이걸 먼저 만들려 하면 막는다.
 

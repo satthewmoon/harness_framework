@@ -34,9 +34,6 @@ compile_commands.json
 dist/
 .eggs/
 
-# Harness 실행 로그 (step별 임시 출력)
-phases/**/step*-output.json
-phases/**/phase*-output.json
 
 # 에디터·OS 파일
 .DS_Store

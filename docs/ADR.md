@@ -61,14 +61,12 @@
 - **이유**: 종류가 적을수록 분류가 빠르고 일관됨. `chore`가 나머지를 흡수.
 - **트레이드오프**: 세밀한 changelog 자동 생성 도구는 필요 시 옵션 확장.
 
-### ADR-008: harness 2단계 커밋 구조
-- **결정**: `execute.py`가 step 완료 시 코드 변경을 `feat: ...`로, 메타데이터(index.json) 업데이트를 `chore: ...`로 분리 커밋한다.
-- **이유**: PR 리뷰 시 사람이 읽어야 할 코드와 자동 생성 메타를 시각적으로 분리. 필요 시 메타 커밋만 squash 가능.
-- **트레이드오프**: 커밋 수가 2배. `--grep='^feat\|^fix'`로 필터링 가능.
+### ADR-008: harness 2단계 커밋 구조 [deprecated 2026-04-18]
+- **폐기 이유**: execute.py 제거(2026-04-18)로 비활성화. 커밋은 이제 `/gsd:execute-phase`의 원자적 커밋 규칙을 따른다.
 
-### ADR-009: /gsd는 일상 개발 워크플로우, /harness는 MVP 초기 빌드 전용
-- **결정**: 두 프레임워크를 역할에 따라 분리 사용한다. /harness는 새 프로젝트의 MVP 초기 빌드(Phase 자동 실행)에만. 이후 개발은 /gsd 워크플로우를 따른다.
-- **이유**: /gsd는 세션 관리·Context Rot 방지·점진적 개발에 최적화. /harness는 독립 서브에이전트 병렬 실행·자동화 빌드에 최적화. 두 도구는 상호 보완 관계.
+### ADR-009: /gsd는 개발 워크플로우, /harness는 인프라·가이드라인 셋업 전용
+- **결정**: 두 프레임워크를 역할에 따라 분리 사용한다. /harness는 프로젝트 인프라·가이드라인 셋업까지만. 실제 구현은 /gsd:execute-phase 또는 /feature-dev를 사용한다.
+- **이유**: /gsd는 세션 관리·Context Rot 방지·Phase 단위 실행에 최적화. /harness는 docs 템플릿·코딩 규칙·품질 훅 제공에 집중. 두 도구는 상호 보완 관계.
 - **트레이드오프**: 두 프레임워크의 개념을 모두 학습해야 함. CLAUDE.md의 워크플로우 표가 가이드 역할.
 
 ### ADR-010: 서브에이전트 독립 순차 실행 — DB→Backend Core→Server→Frontend→Test 순서 강제
@@ -102,20 +100,8 @@
 - **이유**: 로그 파일은 종종 공유되거나 외부로 전송됨. 민감정보 유출 방지.
 - **트레이드오프**: 디버깅 시 실제 값 확인 불가. `--debug` 모드에서만 전체 값 출력하는 것은 명시적 동의 하에 허용.
 
-### ADR-015: SW In the Loop 타임아웃 및 전략 변경 정책
-- **결정**: `execute.py`의 step 재시도 정책은 횟수(최대 3회)와 동일 에러 반복 감지 이중 제한이다.
-  - 동일 에러 2회 연속 → preamble에 "전략 변경 필수" 경고 명시적 주입
-  - 동일 에러 3회 연속 → `status: blocked` 전환, `blocked_reason`에 반복 에러 요약 기록, 실행 중단, 사용자 개입 대기
-  - 60초 이내 즉시 실패는 "전략 탐색"으로 간주해 재시도 카운트 미집계 (빠른 탐색 허용)
-  - subprocess 타임아웃 1800초(30분) 하드 리밋 유지
-- **이유**: 헤드리스 Claude는 동일 에러에서 같은 접근을 반복하는 경향이 있다. 횟수 제한만으로는 빠른 실패 3회가 순식간에 소진되어 유의미한 시도 기회를 놓친다. 동일 에러 감지 + blocked 전환으로 (1) 의미 없는 재시도를 차단하고 (2) 사용자 개입으로 방향을 전환한다. 이것이 토큰·비용 낭비 방지의 핵심이다.
-- **"동일 에러" 판별**: 에러 메시지의 **상위 3줄**을 경로·타임스탬프·PID 정규화 후 문자열 비교. 동일하면 반복 에러 카운트 증가.
-- **구현 위치**:
-  1. `scripts/execute.py` — 재시도 루프에서 직전 에러와 현재 에러를 비교해 전략 변경 preamble 주입 또는 blocked 전환
-  2. `scripts/hooks/circuit-breaker.sh` — Stop 훅에서 이전 step-output과 현재 output을 비교해 `strategy_hint` 필드 기록
-  3. `phases/{task}/index.json` — `strategy_hint`, `repeat_error_count` 필드로 상태 추적
-- **트레이드오프**: 에러 메시지 상위 3줄 비교는 false positive 가능성 있음(다른 원인이 같은 메시지를 내는 경우). blocked 수동 해제 절차(index.json에서 status: pending 복원)로 안전장치 보완. 에러 fingerprint 고도화는 별도 ADR.
-- **연결**: CLAUDE.md C6, C6a / ARCHITECTURE.md "SW In the Loop 디버깅 타임아웃 전략" 섹션.
+### ADR-015: SW In the Loop 타임아웃 및 전략 변경 정책 [deprecated 2026-04-18]
+- **폐기 이유**: execute.py 제거(2026-04-18)로 재시도·blocked 로직 폐기. 향후 재시도 정책은 GSD에서 별도 ADR로 기록.
 
 ### ADR-016: 테스트 피라미드 전략 — 단위:통합:E2E = 70:25:5, 커버리지 70% 기준
 - **결정**: 단위 테스트 70%, 통합 테스트 25%, E2E 테스트 5% 비율을 목표로 테스트를 작성한다. 커버리지 최소 기준은 70%. `circuit-breaker.sh`가 `pytest --cov-fail-under=70`으로 자동 강제. 임계값은 `pyproject.toml [tool.coverage.report] fail_under`로 프로젝트별 조정 가능.

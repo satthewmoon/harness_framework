@@ -84,6 +84,27 @@ record_error() {
     FAIL=1
 }
 
+# harness phases/에서 현재 pending 단계 감지
+detect_pending_step() {
+    local phase_dir idx result
+    for phase_dir in phases/*/; do
+        [ -d "$phase_dir" ] || continue
+        idx="${phase_dir}index.json"
+        [ -f "$idx" ] || continue
+        result="$(python3 - "$idx" <<'PY' 2>/dev/null
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for step in data.get("steps", []):
+    if step.get("status") in ("pending", "in_progress"):
+        print(f"Step {step['step']} ({step['name']})")
+        break
+PY
+)"
+        [ -n "$result" ] && echo "$result" && return
+    done
+}
+
 # pyproject.toml에서 coverage fail_under 읽기, 없으면 기본 70
 read_coverage_threshold() {
     local default=70
@@ -465,13 +486,19 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
 fi
 
 if [ "$FAIL" -ne 0 ]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "CIRCUIT-BREAKER: 검증 실패. 위 에러를 수정한 뒤 계속하세요." >&2
+    PENDING_STEP="$(detect_pending_step)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-    echo "" >&2
-    for err in "${ERRORS[@]}"; do
-        echo "$err" >&2
-    done
+    if [ -n "$PENDING_STEP" ]; then
+        echo "CIRCUIT-BREAKER: $PENDING_STEP 가 아직 완료되지 않아 검증에 실패했습니다." >&2
+        echo "→ /gsd:execute-phase 로 해당 Phase를 실행하거나 /gsd:progress 로 상태를 점검하세요." >&2
+    else
+        echo "CIRCUIT-BREAKER: 검증 실패. 아래 에러를 수정한 뒤 계속하세요." >&2
+        echo "" >&2
+        for err in "${ERRORS[@]}"; do
+            echo "$err" >&2
+        done
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
     exit 1
 fi
 

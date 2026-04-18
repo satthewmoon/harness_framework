@@ -1,7 +1,7 @@
 # 프로젝트: {프로젝트명}
 
 > `{중괄호}`는 새 프로젝트 시작 시 반드시 채운다.
-> `execute.py`가 매 step 실행마다 이 파일을 프롬프트에 주입한다 — placeholder를 채우지 않으면 AI가 혼란을 겪는다.
+> `/harness`가 이 파일을 읽고 프로젝트 규칙의 기준으로 삼는다. 실제 Phase 실행은 `/gsd:execute-phase`가 담당한다.
 > 새 프로젝트 시작 절차는 맨 아래 "새 프로젝트 시작 체크리스트" 참조.
 
 ---
@@ -43,11 +43,11 @@
   - 첫 줄에 `-r requirements.txt`를 넣으면 requirements-dev.txt 하나로 두 파일 모두 설치 가능
 - CRITICAL: 의존성 추가·변경 시 즉시 `pip freeze > requirements.txt`로 버전을 고정한다.
 - CRITICAL: `venv/` 폴더는 `.gitignore`에 포함한다. **절대로 커밋하지 않는다.**
-- CRITICAL: `execute.py`는 venv가 활성화된 셸에서 실행한다. 미활성화 시 `ModuleNotFoundError` 대량 발생 → SW In the Loop C6a의 blocked 조건 유발.
+- CRITICAL: `/gsd:execute-phase`는 venv가 활성화된 셸에서 실행한다.
   ```bash
   # 올바른 실행 방법
   source venv/bin/activate
-  python3 scripts/execute.py {task-name}
+  /gsd:execute-phase {phase-name}
   ```
 - CRITICAL: CI/프로덕션 서버 등 venv가 불가능한 환경에서는 OS 환경변수와 컨테이너 이미지로 대체한다. ARCHITECTURE.md "CI/서버 배포" 섹션 참조.
 
@@ -69,33 +69,7 @@
 ### C4. Git 커밋
 - CRITICAL: 커밋 메시지 형식: `<type>: <요약 (50자 이내)>`. type ∈ {feat, fix, refactor, docs, chore}.
 - CRITICAL: 하나의 커밋 = 하나의 목적. 미완성 코드 커밋 금지.
-- CRITICAL: `execute.py`가 step 완료 시 자동 커밋 (feat + chore 2단계). 수동으로 포맷 깨뜨리지 않는다.
-
-### C5. 서브에이전트 경계 (harness 실행 시)
-- CRITICAL: 각 step은 독립된 Claude 인스턴스로 **순차** 실행된다. 병렬 실행이 아님. step 간 직접 통신은 없다.
-- CRITICAL: 앞 step의 산출물은 `index.json`의 `summary` 필드로만 다음 step에 전달된다.
-- CRITICAL: DB 스키마 step이 완료되기 전에 Backend Core step을 시작하지 않는다.
-- CRITICAL: 서비스 인터페이스(함수 시그니처)가 확정되기 전에 서버 레이어(라우터) step을 시작하지 않는다.
-- CRITICAL: API 계약(엔드포인트·요청/응답 형식)이 확정되기 전에 프론트엔드 step을 시작하지 않는다.
-- CRITICAL: 테스트 step은 모든 구현 step이 완료된 후에 시작한다.
-- CRITICAL: 각 step은 자신의 산출물 요약을 `summary` 필드에 한 줄로 반드시 기록한다. summary가 없으면 다음 step이 컨텍스트 없이 실행된다.
-- CRITICAL: 권장 step 순서 — DB 스키마 → Backend Core → Server 레이어 → Frontend → Tests. 해당 없는 step은 생략한다.
-
-### C6. 테스트 및 완료 처리
-- CRITICAL: 테스트 없이 기능을 `completed`로 마킹하지 않는다.
-- CRITICAL: step의 Acceptance Criteria 커맨드가 실제로 통과해야 `status: completed`로 업데이트한다.
-- CRITICAL: 재시도는 **횟수(최대 3회) + 동일 에러 반복 감지** 이중 제한이다.
-- CRITICAL: 에러 메시지 상위 3줄이 직전 시도와 동일하면 "동일 에러"로 간주한다. 단순 재시도가 아니라 반드시 **전략을 변경**해야 한다.
-
-### C6a. SW In the Loop 디버깅 타임아웃
-- CRITICAL: 같은 에러가 2회 연속 반복되면 preamble에 "**전략 변경 필수**" 경고가 주입된다. 이 경고가 보이면 다른 접근법을 반드시 선택한다.
-  - 라이브러리 버전 문제 → 다른 라이브러리 또는 버전 고정
-  - 테스트 실패 → 더 작은 단위로 분리해 최소 재현 케이스부터 수정
-  - `ModuleNotFoundError` → venv 활성화 상태 재확인, `pip install` 재실행
-  - import 경로 에러 → 프로젝트 구조와 `sys.path` 재확인
-- CRITICAL: 동일 에러 3회 → `status: blocked`로 전환. `blocked_reason`에 "동일 에러 N회 반복: {에러 요약}. 사용자 개입 필요" 기록. 실행 중단.
-- CRITICAL: 60초 이내 즉시 실패는 "전략 탐색"으로 간주해 재시도 카운트를 소진하지 않는다 (빠른 탐색 허용).
-- CRITICAL: blocked 해제는 사용자가 직접 수행한다. `phases/{task}/index.json`에서 해당 step의 `status`를 `"pending"`으로, `blocked_reason`을 삭제한 뒤 `execute.py`를 재실행.
+- CRITICAL: Phase 완료 후 원자적 커밋 1개로 정리한다.
 
 ### C7. 프로젝트 특화 규칙 (새 프로젝트 시작 시 작성)
 - CRITICAL: {프로젝트 고유의 절대 규칙 — 없으면 이 섹션 삭제}
@@ -105,6 +79,12 @@
 - CRITICAL: 이유: DB 스키마 step에서 억지로 70% 커버리지를 맞추려 하면 무의미한 테스트가 생성된다. 커버리지는 Tests step에서 전체를 통과하면 된다.
 - CRITICAL: Tests step이 아닌 step의 표준 AC: `ruff check . && python -c "from src.{모듈} import *"` (임포트 오류 없음 확인)
 - CRITICAL: Tests step의 표준 AC: `pytest --cov=src --cov-fail-under=70 && ruff check .`
+
+### C9. GSD + harness 역할 분리
+- CRITICAL: harness는 **인프라 셋업 전담** — docs/, CLAUDE.md, .gitignore, .env.example 생성까지만.
+- CRITICAL: Phase 실행·상태 관리는 `/gsd:execute-phase`가 담당한다. harness가 직접 코드를 생성하거나 Phase를 실행하지 않는다.
+- CRITICAL: harness가 생성한 `docs/PRD.md`는 GSD의 `.planning/ROADMAP.md`와 연계된다. `/gsd:new-project` 또는 `/gsd:plan-phase` 실행 시 docs/PRD.md를 입력 자료로 활용한다.
+- CRITICAL: `/gsd:verify-work`로 UAT를 통과해야 GSD Phase를 완료로 처리한다.
 
 ### C8. 테스트 완결성 및 회귀 방지
 - CRITICAL: 비즈니스 로직이 있는 모든 함수는 단위 테스트를 가져야 한다. 단순 getter/setter 제외.
@@ -126,8 +106,10 @@
 
 | 상황 | 사용할 도구 |
 |------|------------|
-| 새 프로젝트 MVP 전체 빌드 | `/harness` → `execute.py` |
-| 새 프로젝트 초기 설정 | `/gsd:new-project` |
+| 프로젝트 인프라·가이드라인 셋업 | `/harness` |
+| 새 프로젝트 시작 (GSD 상태 관리) | `/gsd:new-project` |
+| Phase 단위 계획 수립 | `/gsd:plan-phase` |
+| Phase 실행 | `/gsd:execute-phase` |
 | 기존 프로젝트 기능 추가 (복잡, 여러 파일) | `/feature-dev` |
 | 기존 프로젝트 기능 추가 (간단, 단일 파일) | `/gsd:fast` |
 | 버그 수정 | `/gsd:debug` |
@@ -135,18 +117,23 @@
 | 세션 재개 | `/gsd:resume-work` |
 | 세션 마무리 | `/gsd:session-report` |
 
-> **원칙**: `/harness`는 MVP 초기 빌드(Phase 단위 자동 실행)에 쓰고, 이후 일상 개발은 `/gsd` 워크플로우를 따른다.
+> **원칙**: `/harness`는 인프라·가이드라인 셋업까지만. 실제 구현은 `/gsd:execute-phase` 또는 `/feature-dev`를 사용한다.
 
 ---
 
 ## 명령어
 
-### harness 실행
+### harness 셋업
 ```bash
-/harness                                      # Claude Code 슬래시 커맨드 — 탐색→논의→phase 설계
-source venv/bin/activate                      # 반드시 먼저 활성화
-python3 scripts/execute.py {task-name}        # task 순차 실행
-python3 scripts/execute.py {task-name} --push # 실행 후 원격 push
+/harness                    # Claude Code 슬래시 커맨드 — 탐색→논의→인프라 셋업→위임
+```
+
+### GSD 실행
+```bash
+/gsd:new-project            # 프로젝트 상태 관리 시작
+/gsd:plan-phase             # Phase 계획 수립
+/gsd:execute-phase          # Phase 실행
+source venv/bin/activate    # Python 프로젝트: Phase 실행 전 반드시 venv 활성화
 ```
 
 ### Python 프로젝트 (venv 격리 필수)
@@ -191,7 +178,7 @@ ctest --test-dir build --output-on-failure
 ## 새 프로젝트 시작 체크리스트
 
 새 프로젝트를 `/coding/projects/{이름}/`에 복제한 직후 아래 순서로 진행한다.
-**첫 `/harness` 또는 `execute.py` 실행 전에 모두 완료해야 한다.**
+**첫 `/harness` 실행 전에 모두 완료해야 한다.**
 상세 절차는 `docs/QUICKSTART.md` 참조.
 
 - [ ] 1. `docs/PRD.md` placeholder 전체 채우기 (목표, 기능, 제외 사항 최소)

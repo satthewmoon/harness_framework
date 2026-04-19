@@ -95,7 +95,7 @@ cd "$PROJECT"
 git init
 ```
 
-> **폴더명 규칙**: `kebab-case` 소문자만 허용. 예: `telegram-bot`, `auction-crawler`, `price-tracker`.
+> **폴더명 규칙**: `snake_case` 소문자만 허용. 예: `telegram_bot`, `auction_crawler`, `price_tracker`.
 > **절대 하지 말 것**: `cp -r "$HARNESS" "$PROJECT"`로 전체 복사 — `.git`, `scripts/hooks/`, `.claude/commands/` 등 프로젝트에 속하지 않는 자산이 따라 들어온다.
 
 ---

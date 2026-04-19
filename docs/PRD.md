@@ -1,6 +1,6 @@
 # PRD: {프로젝트명}
 
-> 위치: `/coding/projects/{프로젝트명}/` (kebab-case 필수)
+> 위치: `/coding/projects/{프로젝트명}/` (snake_case 필수)
 > `{중괄호}` placeholder는 프로젝트 시작 전 반드시 채운다.
 > AI가 이 문서를 읽고 "무엇을 왜 만드는지"를 파악한다. 모호한 부분 없이 작성한다.
 

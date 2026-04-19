@@ -62,8 +62,13 @@
 정적 인기도(많이 쓰는 스택)가 아니라, 해당 컨셉에 가장 적합한 선택지에 ★를 붙인다.
 탐색에서 기존 코드를 확인했다면 그 언어·구조도 추론에 반영한다.
 
-조건부 질문(Q6·Q7·Q8)은 해당 조건 아닌 경우 "→ Q{N} 건너뜀" 1줄 표기 후 다음으로 넘어간다.
-답변은 모두 모아서 논의 완료 시 한 번에 `docs/PRD.md`와 `CLAUDE.md`에 기록한다.
+조건부 질문(Q6·Q7·Q8)은 해당 조건이 아닌 경우 "→ Q{N} 건너뜀" 1줄 표기 후 다음으로 넘어간다.
+- Q6: Q2에서 "웹 서버 + UI" 또는 "웹 서버 (API만)"을 선택한 경우에만 묻는다
+- Q7: Q2에서 "웹 서버 + UI"를 선택한 경우에만 묻는다
+- Q8: Q7을 답한 경우에만 묻는다
+
+답변은 각 질문마다 Claude가 내부 메모에 기록해 두고, 논의 완료 시 결정 요약 출력 → 사용자 승인 → 한 번에 `docs/PRD.md`와 `CLAUDE.md`에 기록한다.
+논의 도중에는 어떠한 파일도 생성하지 않는다.
 
 #### 질문 포맷
 
@@ -189,11 +194,14 @@ Q5  외부 API를 호출하나요?
 
 #### Q6. 인증/인가 ← Q2에서 웹 서버를 선택한 경우에만 묻는다. 아니면 "→ Q6 건너뜀"
 
+Q0 컨셉을 바탕으로 Recommended를 결정한다.
+(내부 도구·단일 사용자 → 없음 ★, 서버 간 API → API Key ★, 외부 사용자 대면 → JWT 또는 OAuth ★)
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Q6  사용자 인증이 필요한가요?
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  1) 없음             — 단일 사용자 / 내부 도구  ★ Recommended
+  1) 없음             — 단일 사용자 / 내부 도구
   2) API Key
   3) JWT (stateless)
   4) Session 쿠키 (stateful)
@@ -250,22 +258,24 @@ Q8  스타일링 방식은?
 모든 질문이 끝나면 아래 형식으로 요약하고 승인을 요청한다. **승인 전까지 파일을 하나도 생성하지 않는다.**
 
 수정할 항목이 있으면 해당 Q번호를 재질문하고 요약으로 돌아온다 (예: "3" 입력 시 Q3만 다시 묻고 요약 재출력).
+Q0(프로젝트 컨셉)이 수정되면 Recommended를 재평가해야 하므로, "0" 입력 시 Q0 재질문 후 영향을 받은 항목(Q1~Q8 중 Recommended가 바뀔 수 있는 것)도 사용자에게 재확인 요청한다.
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 결정 요약 — 확인 후 인프라 셋업을 시작합니다
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  언어:       {답변}
-  실행 형태:  {답변}
-  실행 환경:  {답변}
-  데이터:     {답변}
-  외부 API:   {답변}
-  인증:       {답변 또는 해당없음}
-  Frontend:   {답변 또는 해당없음}
-  스타일링:   {답변 또는 해당없음}
+  프로젝트 컨셉 (Q0): {Q0 자유 서술 원문 요약 1~2줄}
+  언어 (Q1):          {답변}
+  실행 형태 (Q2):     {답변}
+  실행 환경 (Q3):     {답변}
+  데이터 (Q4):        {답변}
+  외부 API (Q5):      {답변}
+  인증 (Q6):          {답변 또는 해당없음}
+  Frontend (Q7):      {답변 또는 해당없음}
+  스타일링 (Q8):      {답변 또는 해당없음}
 
 y → 인프라 셋업 시작
-번호 → 해당 항목 재질문
+번호(0~8) → 해당 항목 재질문
 ```
 
 ---
@@ -281,8 +291,11 @@ y → 인프라 셋업 시작
 
 #### 3-1. docs/ 문서
 - `docs/PRD.md` — 논의 답변으로 섹션별 채우기. 핵심:
-  - §1 목표, §2 사용자·실행 형태, §3 MVP 기능(최대 5개), §4 제외 사항, §5 DoD
-  - §7 에러 케이스 — 실행 형태에 해당하는 항목만 작성 (DB 없으면 DB 연결 실패 항목 제거)
+  - §1 목표 — Q0 자유 서술을 바탕으로 한 줄 요약·상세 배경·성공 지표 작성
+  - §2 사용자·실행 형태 — §2-1 체크박스는 Q2 답변에 해당하는 항목만 `[x]`로 표시, "결정값" 필드에도 같은 값을 기입
+  - §3 MVP 기능(최대 5개), §4 제외 사항, §5 DoD
+  - §7 에러 케이스 — 실행 형태·데이터·외부 API에 해당하는 항목만 작성 (DB 없으면 DB 연결 실패 제거, 외부 API 없으면 §7-2 전체 제거 등)
+  - §8 데이터 모델 — Q4가 "없음"이면 섹션 삭제
   - §10 향후 확장 — 지금 구현하지 않을 항목만 간단히. 없으면 섹션 삭제
 - `docs/ARCHITECTURE.md` — 해당 언어 섹션만 남기고 나머지 삭제
 - `docs/ADR.md` — "공통 ADR은 harness_framework/docs/ADR.md 참조" 1줄 + ADR-100부터 프로젝트 고유 결정만 기록
@@ -294,14 +307,28 @@ y → 인프라 셋업 시작
 
 #### 3-3. CLAUDE.md (프로젝트 규칙)
 - 프로젝트명, 기술 스택 placeholder 채우기
-- 해당하지 않는 언어 섹션 삭제 (Python만이면 C2b TS, C3 C/C++ 삭제 등)
-- C7(프로젝트 고유 규칙) — 이번 논의에서 나온 특수 제약 기록
+- 해당하지 않는 언어 섹션 삭제:
+  - Python만이면 C2b(TS), C3(C/C++) 삭제. C2, C2a 유지
+  - TypeScript만이면 C2, C2a, C3 삭제. C2b 유지
+  - C/C++만이면 C2, C2a, C2b 삭제. C3 유지
+  - 혼합이면 해당 언어 섹션 모두 유지
+- C7(프로젝트 고유 규칙) — 이번 논의에서 나온 특수 제약 기록. 없으면 C7 섹션 자체 삭제
+- C7b(Step별 AC 차등화)는 그대로 유지 (GSD 실행과 연계)
 
 #### 3-4. 메타 파일
-- `.gitignore` — 언어별 필수 항목 확인 (venv/, __pycache__/, .env, node_modules/ 등)
-- `.env.example` — Q5에서 수집한 시크릿 키 이름만 (실제 값 없이)
+- `.gitignore` — 언어별 필수 항목 확인 (venv/, __pycache__/, .env, node_modules/, build/ 등)
+- `.env.example` — Q5에서 수집한 시크릿 키 이름만 기입. 실제 값은 `your_xxx_here` 같은 placeholder. 예:
+  ```
+  # 외부 API
+  SOME_API_KEY=your_api_key_here
+  # 데이터베이스 (Q4가 DB인 경우)
+  DATABASE_URL=sqlite:///data.db
+  # 로깅
+  LOG_LEVEL=INFO
+  ```
 - `requirements.txt` + `requirements-dev.txt` + `pyproject.toml` (Python)
 - `package.json` + `tsconfig.json` + `biome.json` (TypeScript)
+- `CMakeLists.txt` + `.clang-format` + `.clang-tidy` (C/C++)
 
 #### 3-5. 훅 검증 (Claude Code 품질 가드)
 - `~/.claude/settings.json`의 hooks에 `circuit-breaker.sh`가 등록되어 있는지 확인
@@ -309,12 +336,16 @@ y → 인프라 셋업 시작
 
 #### 3-6. 첫 커밋 (신규 프로젝트만)
 ```bash
-git init
+# git init은 QUICKSTART §2에서 이미 수행했을 수 있다. 중복 실행해도 무해하지만 먼저 확인한다.
+[ -d .git ] || git init
+
 git add CLAUDE.md README.md docs/ .gitignore .env.example
 # Python 프로젝트라면 추가:
 git add requirements.txt requirements-dev.txt pyproject.toml
 # TypeScript 프로젝트라면 추가:
 git add package.json tsconfig.json biome.json
+# C/C++ 프로젝트라면 추가:
+git add CMakeLists.txt .clang-format .clang-tidy
 git commit -m "chore: project skeleton"
 ```
 
@@ -333,11 +364,13 @@ git commit -m "chore: project skeleton"
 harness 셋업 완료
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 생성/보완된 파일:
-  - docs/PRD.md, docs/ARCHITECTURE.md, docs/ADR.md
+  - docs/PRD.md, docs/ARCHITECTURE.md, docs/ADR.md (+ Frontend 있으면 UI_GUIDE.md)
   - README.md
   - CLAUDE.md (프로젝트 규칙)
   - .gitignore, .env.example
-  - [requirements.txt | package.json] (해당 시)
+  - Python: requirements.txt, requirements-dev.txt, pyproject.toml
+  - TypeScript: package.json, tsconfig.json, biome.json
+  - C/C++: CMakeLists.txt, .clang-format, .clang-tidy
 
 다음 단계 (구현은 아래 명령으로):
   · Phase 계획 수립  →  /gsd:new-project  또는  /gsd:plan-phase

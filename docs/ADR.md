@@ -53,7 +53,7 @@
   4. `requirements.txt`(런타임)와 `requirements-dev.txt`(린트/테스트)로 분리
   5. 의존성 변경 시 즉시 `pip freeze > requirements.txt`로 버전 고정
   6. `.gitignore`에 `venv/` 포함 — **절대 커밋 금지**
-- **execute.py와의 결합**: headless Claude 세션도 venv가 활성화된 셸에서 `execute.py`를 실행해야 한다. 미활성화 시 `ModuleNotFoundError` 대량 발생 → SW In the Loop blocked 조건 유발. 자세한 내용은 ARCHITECTURE.md "venv 격리 및 의존성 Lifecycle" 참조.
+- **GSD 실행과의 결합**: `/gsd:execute-phase`로 Phase를 실행할 때 반드시 venv가 활성화된 셸에서 시작한다. 미활성화 시 `ModuleNotFoundError` 대량 발생 → Phase 실패. 자세한 내용은 ARCHITECTURE.md "venv 격리 및 의존성 Lifecycle" 참조.
 - **트레이드오프**: 의존성 해석 성능은 `uv`가 10배 이상 빠르다. 프로젝트 규모 확대 또는 다중 Python 버전 필요 시 ADR-006을 뒤집을 수 있음. 현재는 단순성 우선.
 
 ### ADR-007: 커밋 타입은 Conventional Commits 축약 5종
@@ -114,7 +114,7 @@
 - **이유**: step 단위 개발에서 가장 흔한 회귀 패턴은 "이번 step에서 건드린 코드만 테스트하고 기존 코드의 깨짐을 방치"하는 것이다. 전체 스위트 실행은 이를 원천 차단한다. 특히 harness 서브에이전트 아키텍처에서는 이전 step의 산출물이 summary만 전달되므로, 기존 테스트만이 유일한 회귀 감지 수단이다.
 - **구현 위치**: `circuit-breaker.sh` — `pytest -q --tb=short` (pytest-cov 미설치 시) 또는 `pytest --cov --cov-fail-under={임계값}` (pytest-cov 설치 시)
 - **트레이드오프**: 전체 스위트 실행으로 commit 전 대기 시간 증가. 테스트가 100개 넘어가면 수십 초 추가 소요. 허용 가능한 범위. 1000개 이상이면 병렬 실행(`pytest-xdist`)을 ADR-100+으로 추가.
-- **연결**: CLAUDE.md C8, ARCHITECTURE.md "테스트 전략 및 회귀 방지" 섹션.
+- **연결**: CLAUDE.md C5·C7b, ARCHITECTURE.md "테스트 전략 및 회귀 방지" 섹션.
 
 ### ADR-018: TypeScript 린트·포맷 도구로 biome 권장, 테스트는 vitest/jest
 - **결정**: TypeScript/JavaScript 프로젝트의 린트+포맷 통합 도구로 `biome`를 권장한다. ESLint + Prettier 조합도 허용하지만 biome가 기본. 테스트는 Vite 프로젝트는 `vitest`, Node 서버는 `jest` 또는 `node --test`.

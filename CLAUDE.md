@@ -1,7 +1,8 @@
 # 프로젝트: {프로젝트명}
 
-> `{중괄호}`는 새 프로젝트 시작 시 반드시 채운다.
-> `/harness`가 이 파일을 읽고 프로젝트 규칙의 기준으로 삼는다. 실제 Phase 실행은 `/gsd:execute-phase`가 담당한다.
+> 이 파일은 **프로젝트 CLAUDE.md 템플릿**이다. 새 프로젝트 생성 시 `projects/{프로젝트명}/CLAUDE.md`로 복사해 사용한다.
+> `{중괄호}` placeholder는 반드시 채운다.
+> Claude Code가 프로젝트 세션 시작 시 이 파일을 자동으로 읽는다. 실제 Phase 실행은 `/gsd:execute-phase`가 담당한다.
 > 새 프로젝트 시작 절차는 맨 아래 "새 프로젝트 시작 체크리스트" 참조.
 
 ---
@@ -178,16 +179,26 @@ ctest --test-dir build --output-on-failure
 ## 새 프로젝트 시작 체크리스트
 
 새 프로젝트를 `/coding/projects/{이름}/`에 복제한 직후 아래 순서로 진행한다.
-**첫 `/harness` 실행 전에 모두 완료해야 한다.**
-상세 절차는 `docs/QUICKSTART.md` 참조.
+**상세 절차는 `docs/QUICKSTART.md` 참조.**
 
-- [ ] 1. `docs/PRD.md` placeholder 전체 채우기 (목표, 기능, 제외 사항 최소)
-- [ ] 2. `docs/ARCHITECTURE.md`에서 해당하지 않는 언어 섹션 삭제
-- [ ] 3. `docs/ADR.md`에서 ADR-100부터 프로젝트 고유 결정 추가 (없으면 placeholder 삭제)
-- [ ] 4. 이 `CLAUDE.md`의 프로젝트명·기술 스택·C7 채우기
-- [ ] 5. `docs/UI_GUIDE.md`에서 웹 UI 없으면 "웹 프론트엔드" 섹션 삭제
-- [ ] 6. `.env.example`에 필요한 환경변수 키 작성 → `.env`로 복사 후 실제 값 입력
-- [ ] 7. `.gitignore` 확인 — `venv/`, `__pycache__/`, `.env`, `build/`, `*.pyc` 포함
-- [ ] 8. **(Python)** `python3 -m venv venv && source venv/bin/activate`
-- [ ] 9. **(Python)** `requirements.txt`, `requirements-dev.txt` 초안 작성 후 `pip install -r requirements-dev.txt`
-- [ ] 10. `git init` → 첫 커밋 `chore: project skeleton` → `/harness` 시작
+### A. `/harness` 실행 전에 준비할 것 (환경 셋업)
+
+- [ ] 1. (Python) `python3 -m venv venv && source venv/bin/activate`
+- [ ] 2. (Python) `requirements.txt`, `requirements-dev.txt` 초안 작성 후 `pip install -r requirements-dev.txt`
+- [ ] 3. `~/.claude/settings.json`에 `circuit-breaker.sh` 훅 등록 여부 확인 (QUICKSTART §0)
+
+### B. `/harness` 실행 중 자동으로 채워지는 것 (논의 답변 기반)
+
+`/harness` 슬래시 커맨드를 실행하면 아래를 1문1답 논의 후 자동 생성·채움:
+
+- `docs/PRD.md` placeholder (§1~§7)
+- `docs/ARCHITECTURE.md` (해당 언어 섹션만 남김)
+- `docs/ADR.md` (ADR-100부터)
+- `docs/UI_GUIDE.md` (Frontend 있을 때만)
+- 이 `CLAUDE.md`의 프로젝트명·기술 스택·C7
+- `.gitignore`, `.env.example`
+
+### C. `/harness` 완료 후
+
+- [ ] `git init && git add . && git commit -m "chore: project skeleton"`
+- [ ] `/gsd:new-project` 또는 `/gsd:plan-phase`로 Phase 설계 시작

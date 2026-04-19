@@ -79,18 +79,24 @@ git config --global user.email
 ## 2. 프로젝트 폴더 준비
 
 ```bash
-# 1. harness_framework를 새 프로젝트로 복사
-cp -r /coding/harness_framework /coding/projects/{프로젝트명}
-# 예: cp -r /coding/harness_framework /coding/projects/telegram-notifier
+# 1. harness_framework의 템플릿만 선택적으로 복사
+#    (scripts/, .git/, .claude/ 등 프레임워크 내부 자산은 제외)
+#    HARNESS 환경변수로 루트를 한 번만 정의하면 다른 머신에서도 경로만 바꾸면 된다.
+HARNESS=$HOME/claude/coding/harness_framework
+PROJECT=$HOME/claude/coding/projects/{프로젝트명}
+mkdir -p "$PROJECT"
+cp -r "$HARNESS/docs" "$PROJECT/docs"
+cp "$HARNESS/CLAUDE.md" "$PROJECT/CLAUDE.md"
 
 # 2. 프로젝트 폴더로 이동
-cd /coding/projects/{프로젝트명}
+cd "$PROJECT"
 
-# 3. git 초기화
+# 3. git 초기화 (독립 저장소로 시작)
 git init
 ```
 
 > **폴더명 규칙**: `kebab-case` 소문자만 허용. 예: `telegram-bot`, `auction-crawler`, `price-tracker`.
+> **절대 하지 말 것**: `cp -r "$HARNESS" "$PROJECT"`로 전체 복사 — `.git`, `scripts/hooks/`, `.claude/commands/` 등 프로젝트에 속하지 않는 자산이 따라 들어온다.
 
 ---
 
@@ -110,14 +116,12 @@ git init
 ### Placeholder 잔존 확인
 
 ```bash
-# 채우지 않은 {중괄호} 검출
-grep -rn '{.*}' docs/ CLAUDE.md \
-  | grep -v '예:' \
-  | grep -v 'ADR-1' \
-  | grep -v 'placeholder'
+# 채우지 않은 {중괄호} 검출 — 코드블록(```), ADR-1NN, placeholder 설명 라인은 제외
+grep -rn '{[^}]\+}' docs/ CLAUDE.md \
+  | grep -vE '예:|ADR-1[0-9]{2}|placeholder|`{[^`]*}`'
 ```
 
-위 명령의 출력이 0줄이어야 진행 가능하다.
+위 명령의 출력이 0줄이어야 진행 가능하다. (일부 거짓 양성은 검토 후 무시해도 됨)
 
 ---
 
@@ -211,8 +215,8 @@ echo ".env" >> .gitignore
 # 추가할 파일 확인 (venv/, .env는 절대 포함 금지)
 git status
 
-# 프로젝트 골격 커밋
-git add CLAUDE.md docs/ .gitignore .env.example requirements.txt requirements-dev.txt
+# 프로젝트 골격 커밋 (README.md는 /harness 실행 중 §3-2에서 생성된 후 포함)
+git add CLAUDE.md README.md docs/ .gitignore .env.example requirements.txt requirements-dev.txt
 git commit -m "chore: project skeleton"
 ```
 

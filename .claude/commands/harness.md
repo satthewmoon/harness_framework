@@ -36,25 +36,146 @@
 
 ---
 
-## 워크플로우 — 4단계
+## 워크플로우 — 4단계 (기존 프로젝트는 5단계)
 
-### 1. 탐색
+```
+1. 탐색 (파일 존재 + 내용 분석)
+   └─ 기존 코드가 있으면:
+2. 코드 선행 분석 + 사용자 확인     ← 기존 프로젝트 전용
+3. 논의 (Q0~Q8, 확정된 답은 자동 채움)
+4. 인프라 셋업
+5. 위임
+```
 
-프로젝트 루트의 현황을 파악한다. 아래를 확인하고 한 줄 요약을 사용자에게 보고한다:
+### 1. 탐색 — 파일 존재 확인 + 핵심 파일 내용 분석
 
-- 구현 코드 존재 여부 (`src/`, `main.py`, `*.ts`, `package.json` 등)
+프로젝트 루트의 현황을 파악한다. **파일 존재만 확인하지 않고, 핵심 파일의 내용을 읽어 실행 형태를 자동 추론한다.**
+
+#### 1-1. 기본 현황 파악
+
+- 구현 코드 존재 여부 (`src/`, `main.py`, `app.py`, `index.ts`, `*.cpp`, `package.json` 등)
 - `docs/` 하위 문서 상태 (PRD.md, ARCHITECTURE.md, ADR.md)
 - CLAUDE.md 여부 및 placeholder 잔존 여부
 - `.gitignore`, `.env.example`, `venv/` 상태 (Python 프로젝트)
 - GSD `.planning/` 존재 여부
 
-필요 시 Explore 서브에이전트를 사용한다.
+#### 1-2. 분기 판정 — 신규 vs 기존 프로젝트
 
-> **[ SCOPE CHECK ]** 탐색이 끝났다. 이제 논의를 시작한다. 코드 분석이나 기능 제안은 하지 않는다.
+구현 코드의 실질 존재 여부로 분기한다:
+- **신규 프로젝트 모드**: `src/`·`main.py`·`app.py`·`index.ts`·`*.cpp` 등 실행 코드가 **없음**
+  → 코드 선행 분석(Step 2) 건너뛰고 바로 Q0부터 시작
+- **기존 프로젝트 모드**: 실행 코드가 **있음** (한 파일이라도)
+  → 반드시 Step 2(코드 선행 분석)를 수행한 뒤 Q0로 진입
+
+#### 1-3. 기존 프로젝트의 경우 — 핵심 파일 내용 읽기
+
+아래 파일이 존재하면 **내용을 읽어** 실행 형태·언어·의존성을 추론한다. 파일명만 보고 판단하지 않는다.
+
+**진입점 후보 (내용 분석 필수):**
+- `main.py`, `app.py`, `server.py`, `run.py`, `cli.py`
+- `src/main.py`, `src/app.py`, `src/index.ts`, `src/main.cpp`
+- `index.ts`, `index.js`, `server.ts`
+
+**의존성 파일 (내용 전체 확인):**
+- `requirements.txt`, `requirements-dev.txt`, `pyproject.toml`
+- `package.json` (dependencies, devDependencies, scripts 모두 확인)
+- `CMakeLists.txt`, `Cargo.toml`, `go.mod`
+
+**UI/템플릿 관련 디렉토리·파일:**
+- `templates/`의 `*.html` 파일 (Jinja2 템플릿이면 서버 렌더링 웹)
+- `static/` 디렉토리 (CSS/JS/이미지)
+- `frontend/`, `client/`, `web/`, `ui/` 디렉토리
+
+#### 1-4. 자동 감지 패턴 — 내용에서 찾아야 하는 시그널
+
+**웹 서버 + UI (Flask/FastAPI/Django + 서버 렌더링 또는 SPA):**
+- Python 파일에 `Flask(`, `FastAPI(`, `Starlette(`, `django` 임포트
+- + `templates/` 디렉토리 또는 `render_template(`, `Jinja2Templates(`, `TemplateResponse(` 호출
+- + `*.html` 파일에 `<html`, `<body>` 포함
+- 또는 `package.json`에 `react`, `vue`, `svelte`, `next`, `nuxt`, `vite` 의존성
+
+**웹 서버 (API만, UI 없음):**
+- Flask/FastAPI/Starlette 있으나 `templates/`·HTML 파일 없음
+- `@app.route`, `@app.get`, `@router.get` 등 라우터 정의만
+- 주로 `jsonify(`, `JSONResponse(`, `return {...}` 반환
+
+**CLI 스크립트:**
+- `argparse`, `click`, `typer`, `sys.argv` 사용
+- `if __name__ == "__main__"` + `print(`·`logging` 출력
+- 네트워크 서버 바인딩(`app.run()`, `uvicorn.run()`) 없음
+
+**데몬/백그라운드:**
+- `schedule`, `apscheduler`, `celery`, `rq` 임포트
+- `while True:` 루프 + `time.sleep()` 또는 cron 표현식
+
+**언어 추론:**
+- `*.py` → Python
+- `package.json` + `*.ts`/`*.tsx` → TypeScript
+- `package.json` + `*.js`만 → JavaScript
+- `CMakeLists.txt` + `*.cpp`/`*.hpp` → C++
+- `*.c`/`*.h`만 → C
+- 위 여러 개 공존 → 혼합
+
+#### 1-5. 탐색 결과 출력 (콘솔에 반드시 출력)
+
+```
+[ 탐색 결과 ]
+- 모드:           신규 / 기존 (실행 코드 {있음/없음})
+- 구현 코드:      {있음: 파일 목록 / 없음}
+- 감지된 실행 형태: {Flask 웹서버+UI / FastAPI API만 / CLI / 데몬 / 불명확}
+                  근거: {예: app.py:12 에서 `app = Flask(__name__)`, templates/ 디렉토리 존재}
+- 언어:           {Python / TypeScript / C++ / 혼합(Python+TS)}
+- Frontend:       {Jinja2 템플릿(templates/*.html N개) / React(package.json 확인) / 없음}
+- 외부 의존성:    {requirements.txt/package.json 기준 주요 라이브러리 5개 이내}
+- docs/:          PRD.md {있음/없음}, ARCHITECTURE.md {있음/없음}, ADR.md {있음/없음}
+- CLAUDE.md:      {있음(placeholder 잔존 여부) / 없음}
+- .env.example:   {있음 / 없음}
+- .gitignore:     {있음 / 없음}
+```
+
+필요 시 Explore 서브에이전트를 사용해 내용 분석을 병렬 수행한다.
+
+> **[ SCOPE CHECK ]** 탐색이 끝났다. 기존 프로젝트면 Step 2(코드 선행 분석), 신규면 Step 3(논의)로 간다. 코드 수정이나 기능 제안은 하지 않는다.
 
 ---
 
-### 2. 논의 — Human In The Loop (순차 인터랙티브)
+### 2. 코드 선행 분석 + 사용자 확인 — 기존 프로젝트 전용
+
+> **신규 프로젝트 모드**(실행 코드 없음)에서는 이 단계를 **건너뛰고** 바로 Step 3(논의)의 Q0부터 시작한다.
+
+기존 프로젝트가 있는 경우 Q0 이전에 **탐색 결과를 사용자에게 먼저 보여주고 확인받는다.** 이 단계는 "우리가 코드를 잘못 읽지 않았는지" 확인하는 게이트다.
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+탐색 완료 — 코드 분석 결과
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+감지된 실행 형태: {예: 웹 서버 + UI}
+                 근거: {app.py:5 `app = Flask(__name__)`, templates/ 존재, *.html 3개}
+언어:           {Python}
+Frontend:       {Jinja2 템플릿 (templates/*.html)}
+외부 의존성:    {Flask, pandas, plotly (requirements.txt 기준)}
+데이터 영속성:  {SQLite 파일 data.db 감지 / 없음 / 불명확}
+외부 API:       {감지된 API 클라이언트 코드 / 없음 / 불명확}
+
+이 분석이 맞나요?
+  y              → 맞음, Q0로 진행
+  수정할 부분   → 직접 입력 (예: "Frontend 없음, API만 제공" / "실행 형태는 CLI")
+→
+```
+
+**사용자 확인 처리 규칙:**
+1. `y`로 확인된 항목은 이후 Q1~Q8에서 "자동 확정"으로 처리한다.
+   - 실행 형태(Q2), 언어(Q1), Frontend(Q7), 외부 API(Q5) 등 코드에서 명확히 드러난 항목은 **질문을 생략하고 확정값을 표시만 한 뒤 다음 질문으로 넘어간다.**
+   - 예: `Q2. 실행 형태는? → 웹 서버 + UI (탐색에서 확정, 건너뜀)`
+2. 사용자가 수정했다면 수정된 값을 확정으로 기록한다.
+3. 분석이 **불명확**(예: Flask 있으나 templates/ 없음 — API인지 UI 일부만 있는지 모호)이면, 그 항목만 Q 단계에서 정상적으로 묻는다.
+4. Q0(프로젝트 컨셉)은 **어떤 경우에도 건너뛰지 않는다.** 코드만으로는 "왜 만들었나"를 알 수 없기 때문이다. Q0는 "이 코드가 어떤 의도인지 간단히 설명해 주세요" 형태로 보완 서술 용도로 활용한다.
+
+> **[ SCOPE CHECK ]** 사용자 확인이 끝났다. 이제 Q0부터 시작한다. 확정된 항목은 재질문하지 않는다.
+
+---
+
+### 3. 논의 — Human In The Loop (순차 인터랙티브)
 
 **규칙**: 질문은 **1개씩** 순서대로 한다. 답변을 받은 뒤에만 다음으로 넘어간다.
 
@@ -87,13 +208,21 @@ Q{N}  {질문 제목}
 
 #### Q0. 프로젝트 컨셉 (자유 서술) — 가장 먼저 묻는다
 
+**신규 프로젝트 모드:** "어떤 것을 만들고 싶으신가요?" 원래대로 묻는다.
+**기존 프로젝트 모드:** 코드에서 실행 형태·언어·구조는 이미 확정됐으므로 "이 프로젝트가 무엇을 목적으로 하는지, 특이사항·제약이 있는지" 간단히 보완 서술을 요청한다.
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Q0  어떤 것을 만들고 싶으신가요?
+Q0  프로젝트 컨셉
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-짧게 설명해 주세요. 목적·데이터·사용자·특이사항 등을 자유롭게.
-예: "주식 데이터를 수집해서 백테스팅하는 CLI 스크립트"
-예: "팀 내부에서 쓰는 REST API + 간단한 관리 대시보드"
+[신규 프로젝트] 어떤 것을 만들고 싶으신가요?
+  짧게 설명해 주세요. 목적·데이터·사용자·특이사항 등을 자유롭게.
+  예: "주식 데이터를 수집해서 백테스팅하는 CLI 스크립트"
+  예: "팀 내부에서 쓰는 REST API + 간단한 관리 대시보드"
+
+[기존 프로젝트] 이미 아래 구조가 확인되었습니다:
+  {탐색 요약 한 줄 — 예: "Flask 웹서버 + Jinja2 UI, 주식 백테스팅"}
+  이 프로젝트가 무엇을 목적으로 하는지, 제약이나 특이사항이 있는지 알려주세요.
 
 →
 ```
@@ -101,7 +230,11 @@ Q0  어떤 것을 만들고 싶으신가요?
 Q0 답변을 받으면:
 1. 답변 내용을 분석해 프로젝트의 핵심 특성을 파악한다 (성능 중요도, 데이터 규모, 사용자 수, UI 필요 여부 등)
 2. Q1~Q8의 `★ Recommended`를 이 컨셉에 맞게 결정한다 — **정적 인기 순위가 아닌 컨셉 적합성 기준**
-3. 예시:
+3. **기존 프로젝트 모드**: Step 2에서 확정된 항목(실행 형태·언어·Frontend 등)은 Q 질문 시 **재질문하지 않고 확정값 표시 1줄만 출력**한 뒤 넘어간다:
+   ```
+   Q2  실행 형태는?  → 웹 서버 + UI (Step 2에서 확정, 건너뜀)
+   ```
+4. Recommended 예시:
    - "고성능 알고리즘 트레이딩 엔진" → C++ ★
    - "주식 데이터 수집·분석 스크립트" → Python ★, CLI ★, SQLite ★
    - "실시간 트레이딩 대시보드" → TypeScript ★, 웹 서버+UI ★, WebSocket 언급
@@ -280,7 +413,7 @@ y → 인프라 셋업 시작
 
 ---
 
-### 3. 인프라 셋업
+### 4. 인프라 셋업
 
 > **[ PRE-FLIGHT CHECK ]** 셋업 시작 전 자기 점검:
 > - 생성할 것: `docs/`, `CLAUDE.md`, `.gitignore`, `.env.example`, `README.md`
@@ -289,7 +422,7 @@ y → 인프라 셋업 시작
 
 사용자 승인 후, 아래를 생성하거나 보완한다. **기존 파일을 덮어쓸 때는 사용자에게 먼저 확인받는다.**
 
-#### 3-1. docs/ 문서
+#### 4-1. docs/ 문서
 - `docs/PRD.md` — 논의 답변으로 섹션별 채우기. 핵심:
   - §1 목표 — Q0 자유 서술을 바탕으로 한 줄 요약·상세 배경·성공 지표 작성
   - §2 사용자·실행 형태 — §2-1 체크박스는 Q2 답변에 해당하는 항목만 `[x]`로 표시, "결정값" 필드에도 같은 값을 기입
@@ -301,11 +434,11 @@ y → 인프라 셋업 시작
 - `docs/ADR.md` — "공통 ADR은 harness_framework/docs/ADR.md 참조" 1줄 + ADR-100부터 프로젝트 고유 결정만 기록
 - `docs/UI_GUIDE.md` — Frontend 없으면 파일 자체 삭제. Frontend 있으면 AI 슬롭 안티패턴 섹션 유지하고 이후 `/gsd:ui-phase` 작업 시 참조 안내
 
-#### 3-2. README.md
+#### 4-2. README.md
 - 프로젝트명, 한 줄 설명, 설치·실행 방법, 환경변수 목록 최소 구성으로 작성한다.
 - 기존 README가 있으면 내용을 보완하고 덮어쓰기 전 사용자 확인.
 
-#### 3-3. CLAUDE.md (프로젝트 규칙)
+#### 4-3. CLAUDE.md (프로젝트 규칙)
 - 프로젝트명, 기술 스택 placeholder 채우기
 - 해당하지 않는 언어 섹션 삭제:
   - Python만이면 C2b(TS), C3(C/C++) 삭제. C2, C2a 유지
@@ -315,7 +448,7 @@ y → 인프라 셋업 시작
 - C7(프로젝트 고유 규칙) — 이번 논의에서 나온 특수 제약 기록. 없으면 C7 섹션 자체 삭제
 - C7b(Step별 AC 차등화)는 그대로 유지 (GSD 실행과 연계)
 
-#### 3-4. 메타 파일
+#### 4-4. 메타 파일
 - `.gitignore` — 언어별 필수 항목 확인 (venv/, __pycache__/, .env, node_modules/, build/ 등)
 - `.env.example` — Q5에서 수집한 시크릿 키 이름만 기입. 실제 값은 `your_xxx_here` 같은 placeholder. 예:
   ```
@@ -330,11 +463,11 @@ y → 인프라 셋업 시작
 - `package.json` + `tsconfig.json` + `biome.json` (TypeScript)
 - `CMakeLists.txt` + `.clang-format` + `.clang-tidy` (C/C++)
 
-#### 3-5. 훅 검증 (Claude Code 품질 가드)
+#### 4-5. 훅 검증 (Claude Code 품질 가드)
 - `~/.claude/settings.json`의 hooks에 `circuit-breaker.sh`가 등록되어 있는지 확인
 - 미등록 시 `harness_framework/docs/QUICKSTART.md §0` 절차를 사용자에게 안내
 
-#### 3-6. 첫 커밋 (신규 프로젝트만)
+#### 4-6. 첫 커밋 (신규 프로젝트만)
 ```bash
 # git init은 QUICKSTART §2에서 이미 수행했을 수 있다. 중복 실행해도 무해하지만 먼저 확인한다.
 [ -d .git ] || git init
@@ -353,7 +486,7 @@ git commit -m "chore: project skeleton"
 
 ---
 
-### 4. 위임 — 다음 단계 안내
+### 5. 위임 — 다음 단계 안내
 
 > **[ HANDOFF ]** 인프라 셋업이 끝났다. 이제 구현은 내 역할이 아니다.
 

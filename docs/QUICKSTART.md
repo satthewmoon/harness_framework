@@ -215,7 +215,7 @@ echo ".env" >> .gitignore
 # 추가할 파일 확인 (venv/, .env는 절대 포함 금지)
 git status
 
-# 프로젝트 골격 커밋 (README.md는 /harness 실행 중 §3-2에서 생성된 후 포함)
+# 프로젝트 골격 커밋 (README.md는 /harness 실행 중 §4-2에서 생성된 후 포함)
 git add CLAUDE.md README.md docs/ .gitignore .env.example requirements.txt requirements-dev.txt
 git commit -m "chore: project skeleton"
 ```
@@ -229,8 +229,14 @@ git commit -m "chore: project skeleton"
 /harness
 ```
 
-`/harness`는 **탐색 → 1문1답 논의 → 인프라 셋업(docs/, CLAUDE.md 등) → 위임** 순서로 진행한다.
-실제 구현 코드는 생성하지 않는다.
+`/harness`는 두 모드로 동작한다. 모드 판정은 **실행 코드 존재 여부**로 자동 결정된다.
+
+- **신규 프로젝트 모드** (실행 코드 없음):
+  `탐색 → 1문1답 논의(Q0~Q8) → 인프라 셋업(docs/, CLAUDE.md 등) → 위임`
+- **기존 프로젝트 모드** (실행 코드 있음 — 이 QUICKSTART 이후 이미 코드가 있는 상태에서 재실행하거나, 후행 적용 시):
+  `탐색(파일 내용 분석) → 코드 선행 분석 + 사용자 확인 → Q0(보완 서술) → 확정되지 않은 항목만 논의 → 인프라 셋업 → 위임`
+
+기존 프로젝트 모드에서는 `app.py`·`main.py`·`index.ts` 등 진입점의 **내용을 읽어** Flask/FastAPI/CLI/데몬 여부를 자동 판정하고, 사용자에게 분석 결과를 먼저 확인받는다. 실제 구현 코드는 어떤 모드에서도 생성하지 않는다.
 
 인프라 셋업 완료 후 아래 명령으로 개발을 시작한다:
 

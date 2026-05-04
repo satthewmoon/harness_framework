@@ -33,6 +33,8 @@
 - CRITICAL: 네이밍 — 변수/함수 `snake_case`, 클래스 `PascalCase`, 상수 `UPPER_SNAKE_CASE`, 비공개 속성 `_single_underscore`.
 - CRITICAL: 코드 변경 후 `ruff check .` 통과 필수. 실패하면 step을 completed 처리하지 않는다.
 - CRITICAL: import 정렬은 `ruff check --select I --fix .`로 자동 수정.
+- 권장: `mypy . --ignore-missing-imports` 실행. 정적 타입 오류(잘못된 kwarg 이름, None 역참조, 타입 불일치)를 런타임 이전에 발견. ruff가 못 잡는 버그 클래스를 커버한다. 신규 프로젝트는 첫 날부터 적용 권장. `requirements-dev.txt`에 `mypy` 포함.
+- 권장: `if __name__ == "__main__":` 가드 안의 코드는 `pytest`가 실행하지 않는다. CLI 진입점(`main.py` 등)은 `mypy main.py`로 별도 검증하거나 smoke test(`subprocess.run([sys.executable, "main.py", ...])`)를 작성한다.
 
 ### C2a. venv 격리 — Python 프로젝트 필수
 - CRITICAL: Python 프로젝트는 프로젝트 루트에 `venv/` 폴더로 가상환경을 생성한다. 폴더명은 **`venv` 고정**. `.venv`, `env`, `virtualenv` 등 변형 금지.
@@ -40,7 +42,7 @@
 - CRITICAL: **모든** `pip install` 명령은 venv 활성화 상태에서만 실행한다. 시스템 파이썬에 패키지를 설치하지 않는다.
 - CRITICAL: 의존성은 용도별로 분리한다.
   - `requirements.txt` — 런타임 의존성 (예: `requests==2.31.0`, `python-dotenv==1.0.0`)
-  - `requirements-dev.txt` — 린트·테스트 전용 (예: `ruff==0.4.0`, `pytest==7.4.0`)
+  - `requirements-dev.txt` — 린트·테스트 전용 (예: `ruff==0.4.0`, `pytest==7.4.0`, `pytest-cov==4.1.0`, `mypy==1.8.0`)
   - 첫 줄에 `-r requirements.txt`를 넣으면 requirements-dev.txt 하나로 두 파일 모두 설치 가능
 - CRITICAL: 의존성 추가·변경 시 즉시 `pip freeze > requirements.txt`로 버전을 고정한다.
 - CRITICAL: `venv/` 폴더는 `.gitignore`에 포함한다. **절대로 커밋하지 않는다.**
@@ -85,6 +87,9 @@
   - 예: `test_fetch_items_api_timeout_retries_three_times`
 - CRITICAL: 테스트 간 독립성 유지. 실행 순서 의존 금지. 공유 상태는 `conftest.py` fixture로 매 테스트 전 초기화.
 - CRITICAL: 경계값 테스트 의무 — None, 빈 문자열, 빈 리스트, 최대값, 최소값, 0, 음수. PRD 섹션 7의 엣지 케이스가 기준.
+- CRITICAL: **모든 API 라우트 / HTTP 엔드포인트는 단위 테스트를 가져야 한다.** 정상 응답·필수 파라미터 누락(400)·타입 불일치(400)·인증 실패(401/403) 케이스를 모두 검증한다. Flask는 `app.test_client()`, FastAPI는 `TestClient`로 직접 호출한다.
+- CRITICAL: **공유 상태(캐시·전역 dict 등)에 동시 접근하는 코드는 동시성 테스트를 가져야 한다.** `concurrent.futures.ThreadPoolExecutor`로 N개 스레드를 동시 실행해 race condition·키 충돌·deadlock 부재를 검증한다.
+- CRITICAL: **CLI 진입점(`main.py`)은 smoke test로 검증한다.** `subprocess.run([sys.executable, "main.py", "--help"])` 또는 `runpy.run_path("main.py")`로 import·인자 파싱·기본 호출이 TypeError·NameError 없이 통과하는지 확인한다. 이유: `if __name__ == "__main__":` 가드 안의 코드는 pytest가 자동 실행하지 않아 잘못된 kwarg 이름·타입 등 잠복 버그가 출시 시점까지 발견되지 않는다.
 
 ### C6. GSD + harness 역할 분리
 - CRITICAL: harness는 **인프라 셋업 전담** — docs/, CLAUDE.md, .gitignore, .env.example 생성까지만.
@@ -94,6 +99,60 @@
 
 ### C7. 프로젝트 특화 규칙 (새 프로젝트 시작 시 작성)
 - CRITICAL: {프로젝트 고유의 절대 규칙 — 없으면 이 섹션 삭제}
+
+### C8. 모듈 경계 · DRY · 동시성 · 라우트 일관성
+
+> stock_backtesting 프로젝트에서 발견된 구조적 취약점을 모체 규칙으로 승격한 항목. 신규 프로젝트는 첫 날부터 이 규칙들을 적용한다.
+
+**C8-1. private 함수의 모듈 경계 (CRITICAL)**
+- CRITICAL: `_` 접두어 함수/변수는 **정의된 모듈 내에서만** 사용한다. 다른 모듈이 `from module import _private_fn` 형태로 import하는 것을 금지한다.
+- 이유: private 시그널과 실제 사용이 모순되면 새 개발자가 혼란을 겪는다. 타입 체커·린터도 이 위반을 자동으로 잡지 못한다.
+- 적용: 두 모듈이 같은 함수를 필요로 하면 즉시 `metrics.py`, `utils.py`, `shared.py` 등 공용 모듈로 승격하고 언더스코어를 제거한다.
+- 검출: `grep -rnE "from [a-zA-Z_]+ import _[a-zA-Z_]+" src/`로 사전 감시 가능 (CI 또는 사용자 검수 시점에 실행).
+
+**C8-2. 공용 계산 함수 DRY 규칙 (CRITICAL)**
+- CRITICAL: 동일한 계산 로직(특히 수치 계산·검증·변환)이 2개 이상의 모듈에 나타나면 즉시 공용 모듈로 추출한다.
+- 이유: 각 구현의 엣지 케이스 처리(예: 0 나누기 정책, NaN 처리, 빈 리스트 반환값)가 시간이 지나며 미묘하게 달라지면 호출 위치에 따라 다른 결과가 나오는 조용한 버그가 발생한다.
+- 적용: 함수 시그니처와 엣지 케이스 정책(0 나누기 → `None`/`0.0`/`raise` 중 무엇인지)을 한 모듈에서 명시적으로 결정하고, 다른 모듈은 그 함수를 import해서만 사용한다.
+
+**C8-3. 스레드·요청 공유 상태 안전성 (CRITICAL)**
+- CRITICAL: 요청 핸들러·스레드 간 공유되는 상태(캐시, 전역 딕셔너리, 모듈 레벨 변수)는 반드시 `threading.Lock` 또는 `threading.RLock`으로 보호한다.
+- CRITICAL: Flask·FastAPI 등 다중 스레드 WSGI/ASGI 환경에서 모듈 전역 dict를 `global` 키워드로 읽기/쓰기 하는 코드는 금지한다.
+- 권장: 공유 상태는 별도 클래스로 캡슐화하고 읽기/쓰기 메서드만 노출 (Repository 패턴). 향후 DB·Redis 전환 시 호출부 변경 없이 구현만 교체할 수 있다.
+  ```python
+  from threading import RLock
+
+  class AppCache:
+      def __init__(self) -> None:
+          self._data: dict[str, object] = {}
+          self._lock = RLock()
+
+      def get(self, key: str) -> object | None:
+          with self._lock:
+              return self._data.get(key)
+
+      def set(self, key: str, value: object) -> None:
+          with self._lock:
+              self._data[key] = value
+  ```
+- 검증: C5의 동시성 테스트(ThreadPoolExecutor로 N개 스레드 동시 호출) 의무.
+
+**C8-4. API 라우트 검증 일관성 (CRITICAL)**
+- CRITICAL: 같은 앱(Flask/FastAPI 등)의 모든 API 엔드포인트는 동일한 필수 파라미터 검증 패턴을 사용한다. 일부 라우트만 검증하고 다른 라우트는 검증 없이 통과시키는 혼재 패턴 금지.
+- 권장 패턴:
+  1. 모듈 상수로 required 키 목록 정의 — `RUN_REQUIRED_KEYS = ("symbol", "start", "end", "envelope")`
+  2. 공용 헬퍼로 검증 — `validate_payload(payload, required_keys)` 한 함수가 누락 시 400 응답 객체 반환
+  3. 모든 라우트가 같은 헬퍼를 호출 — 인라인 if 검증 금지
+- 이유: 검증 패턴이 라우트마다 다르면 한 곳을 고쳐도 다른 곳은 누락된다. 보안·검증 정책의 단일 진실 원천(SSoT) 확보.
+
+**C8-5. 정적 타입 검사로 잠복 버그 차단 (권장)**
+- 권장: `mypy . --ignore-missing-imports`를 개발 루프와 CI에 포함한다.
+- 이유: 다음과 같은 버그 클래스는 ruff·pytest로는 잡히지 않고 오직 mypy만 잡는다:
+  - 잘못된 keyword 인자 이름 (`run_backtest(envelope_pct=0.05)`인데 함수 시그니처는 `upper_pct`/`lower_pct`만 받음)
+  - 함수 호출 시 위치 인자 개수 불일치
+  - `None` 반환 가능 함수의 결과를 곧바로 역참조
+  - 타입 불일치(`str` 기대 자리에 `int` 전달)
+- 적용: `if __name__ == "__main__":` 가드 안의 코드는 pytest가 실행하지 않으므로 `mypy`가 유일한 안전망이다. CLI 진입점·스크립트 파일에 특히 중요.
 
 ### C7b. Step별 AC(Acceptance Criteria) 차등화
 - CRITICAL: 커버리지 검증(`pytest --cov-fail-under=70`)은 **Tests step에서만** required다. 그 외 step(DB 스키마, Backend Core, Server 레이어, Frontend)에서는 `ruff check .` + 해당 step 기능 동작 확인까지만 요구한다.
@@ -150,11 +209,12 @@ source venv/bin/activate          # Linux/macOS
 pip install -r requirements.txt -r requirements-dev.txt
 
 # 4. 개발 루프
-ruff check .                      # 린트 검사
-ruff check --select I --fix .     # import 정렬
-ruff format .                     # 포맷
-pytest                            # 테스트
-python main.py                    # 실행
+ruff check .                          # 린트 검사
+ruff check --select I --fix .         # import 정렬
+ruff format .                         # 포맷
+mypy . --ignore-missing-imports       # 정적 타입 체크 (권장 — C2/C8-5)
+pytest                                # 테스트
+python main.py                        # 실행
 
 # 5. 의존성 변경 후 버전 고정
 pip freeze > requirements.txt

@@ -297,8 +297,11 @@ if [ "$IS_PYTHON" = true ]; then
                 # pytest-cov 설치 여부 확인
                 if python3 -c "import pytest_cov" >/dev/null 2>&1; then
                     echo "  · 전체 테스트 스위트 + 커버리지 ≥${COV_THRESHOLD}% 검사 (ADR-016/017)"
+                    # src/ layout vs flat layout 자동 감지
+                    _COV_DIR="src"
+                    [ -d "src" ] || _COV_DIR="."
                     run_check "pytest --cov (커버리지 ≥${COV_THRESHOLD}%)" "required" \
-                        pytest --cov=src --cov-report=term-missing \
+                        pytest --cov="$_COV_DIR" --cov-report=term-missing \
                                --cov-fail-under="$COV_THRESHOLD" \
                                -q --tb=short
                 else
@@ -485,22 +488,58 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     echo ""
 fi
 
+# ─────────────────────────────────────
+# 재시도 카운터 (무한루프 방지)
+# ─────────────────────────────────────
+CB_COUNTER_FILE="/tmp/cb-retry-$(echo "$PROJECT_ROOT" | md5sum | cut -c1-8).count"
+MAX_AUTO_FIX=5
+
 if [ "$FAIL" -ne 0 ]; then
+    # 재시도 횟수 읽기 및 증가
+    RETRY_COUNT=0
+    if [ -f "$CB_COUNTER_FILE" ]; then
+        RETRY_COUNT="$(cat "$CB_COUNTER_FILE" 2>/dev/null || echo 0)"
+    fi
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "$RETRY_COUNT" > "$CB_COUNTER_FILE"
+
     PENDING_STEP="$(detect_pending_step)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-    if [ -n "$PENDING_STEP" ]; then
-        echo "CIRCUIT-BREAKER: $PENDING_STEP 가 아직 완료되지 않아 검증에 실패했습니다." >&2
-        echo "→ /gsd:execute-phase 로 해당 Phase를 실행하거나 /gsd:progress 로 상태를 점검하세요." >&2
+
+    if [ "$RETRY_COUNT" -gt "$MAX_AUTO_FIX" ]; then
+        # 최대 시도 초과 — non-blocking으로 사용자에게 알림
+        echo "[CIRCUIT-BREAKER] 자동 수정 ${MAX_AUTO_FIX}회 시도 후에도 실패했습니다. 사용자 확인이 필요합니다." >&2
+        echo "" >&2
+        echo "남은 에러:" >&2
+        for err in "${ERRORS[@]}"; do
+            echo "$err" >&2
+        done
+        echo "" >&2
+        echo "수동으로 에러를 확인하고 직접 수정하세요." >&2
+        rm -f "$CB_COUNTER_FILE"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+        exit 1  # non-blocking: 사용자에게 알림만
+    elif [ -n "$PENDING_STEP" ]; then
+        echo "[CIRCUIT-BREAKER] 자동 수정 시도 $RETRY_COUNT/$MAX_AUTO_FIX — $PENDING_STEP 가 미완료 상태입니다." >&2
+        echo "" >&2
+        echo "지금 즉시 /gsd:execute-phase 를 실행하거나 /gsd:progress 로 Phase 상태를 점검하고 완료하세요." >&2
+        echo "완료 후 작업을 마치면 자동으로 재검증됩니다." >&2
     else
-        echo "CIRCUIT-BREAKER: 검증 실패. 아래 에러를 수정한 뒤 계속하세요." >&2
+        echo "[CIRCUIT-BREAKER] 자동 수정 시도 $RETRY_COUNT/$MAX_AUTO_FIX — 지금 즉시 아래 에러를 모두 수정하세요." >&2
         echo "" >&2
         for err in "${ERRORS[@]}"; do
             echo "$err" >&2
         done
+        echo "" >&2
+        echo "모든 에러를 수정한 뒤 작업을 마치면 circuit-breaker가 자동으로 재검증합니다." >&2
+        echo "수정 없이 종료하지 마세요 — 검증을 통과할 때까지 반복 수정하세요." >&2
     fi
+
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-    exit 1
+    exit 2  # blocking: Claude에게 계속 작업 신호
 fi
 
+# 성공 시 카운터 초기화
+rm -f "$CB_COUNTER_FILE" 2>/dev/null || true
 echo "✅ 모든 검사 통과"
 exit 0

@@ -121,6 +121,12 @@
 - **이유**: biome는 Rust 구현체로 10~100배 빠름. 린트·포맷·import 정렬을 하나의 도구로. ADR-001(Python ruff)과 동일한 철학. vitest는 Vite 에코시스템과 자연스럽게 통합.
 - **트레이드오프**: biome는 일부 ESLint 플러그인 규칙 미지원. ESLint 생태계 의존 프로젝트(Next.js 등)는 기존 ESLint 유지 가능.
 
+### ADR-020: Plotly hovertemplate d3-format 부호 수정자 금지 — customdata 패턴 강제
+- **결정**: Plotly hovertemplate에서 `%{y:+.2f}` 같은 d3-format 부호 수정자(`+`)를 사용하지 않는다. 부호 포함 소수점 표기가 필요하면 Python에서 `f"{val:+.2f}"`로 미리 포맷한 문자열을 `customdata` 배열로 전달하고, hovertemplate에서는 `%{customdata}`로 참조한다.
+- **이유**: Plotly Bar trace의 hovertemplate d3-format에서 `+.2f`는 값이 정확히 `0.0`일 때 소수점과 부호 모두 무시하고 `0`으로만 렌더링한다(Plotly/d3 라이브러리 버그). Python f-string `f"{0.0:+.2f}" = "+0.00"`과 결과가 달라 데이터 신뢰성을 해친다. stock_backtesting delta bar에서 2024년 동률 연도에 `0%`로 표시되는 현상으로 발견.
+- **트레이드오프**: customdata 배열을 별도로 생성해야 하는 보일러플레이트가 증가한다. 그러나 포맷 정확성이 보장되고 Python 단에서 단위 테스트가 가능하다.
+- **파생 규칙**: `test_no_d3_sign_format_in_hovertemplates` 테스트가 `%{변수:+형식}` 패턴을 소스 전수 검사한다.
+
 ### ADR-019: UI 디버깅 — 아키텍처 우선, JS 타이밍 최후
 - **결정**: UI/차트 렌더링 버그는 JS 세부 조정(RAF, resize, reflow) 전에 아키텍처 수준 원인을 먼저 확인한다. 3회 이상 같은 방향으로 실패하면 즉시 아키텍처 재설계로 전환한다.
 - **이유**: display:none 컨테이너의 Plotly category 차트에서 JS timing fix를 10회 이상 시도했으나 모두 실패. 해결책은 JS가 아닌 구조 변경(make_subplots 삽입)이었음. JS 코드 누적은 다음 디버깅을 더 어렵게 만든다.

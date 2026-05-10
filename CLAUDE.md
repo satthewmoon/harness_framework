@@ -180,6 +180,21 @@
 - CRITICAL: 여러 변경사항을 한 커밋에 쌓지 않는다. 한 변경 = 한 확인 = 한 커밋.
 - 이유: 한 번에 여러 변경을 쌓으면 어느 변경이 어떤 효과를 냈는지 분리할 수 없고, 회귀 발생 시 원인 추적 비용이 폭증한다. 사용자가 중간에 방향을 바꾸고 싶을 때도 작은 단위로 진행해야 빠르게 돌아갈 수 있다.
 
+**C9-5. Plotly hovertemplate d3-format 부호 수정자 금지 (CRITICAL)**
+- CRITICAL: Plotly hovertemplate에서 `%{y:+.2f}` 같은 **d3-format 부호 수정자(`+`)**를 사용하지 않는다. Plotly Bar trace에서 값이 정확히 `0`일 때 소수점과 부호가 모두 사라지고 `0`으로만 렌더링된다(d3/Plotly 라이브러리 버그). Scatter trace에서도 동일 버그 잠재.
+- 이유: `%{y:+.2f}`는 Plotly가 d3-format을 클라이언트(JS)에서 해석할 때 `0.0`을 정수 `0`처럼 처리해 포맷을 무시한다. Python의 `f"{0.0:+.2f}" = "+0.00"`과 결과가 다르다.
+- 올바른 방법: 부호 포함 소수점 포맷이 필요하면 **Python 서버에서 미리 포맷팅 후 `customdata`로 전달**한다.
+  ```python
+  # ❌ 금지
+  hovertemplate=f"%{{x}}: %{{y:+.2f}}%<extra>Delta</extra>"
+  # ✅ 올바른 방법
+  delta_hover = [f"{d:+.2f}" if d is not None else "N/A" for d in delta_vals]
+  go.Bar(..., customdata=delta_hover,
+         hovertemplate="%{x}: %{customdata}%<extra>Delta</extra>")
+  ```
+- 검출: `grep -n '%{[^}]*:+' chart.py` — 부호 수정자가 포함된 hovertemplate 패턴 즉시 탐지. 또는 `test_no_d3_sign_format_in_hovertemplates` 테스트가 자동 검출.
+- 적용 범위: 부호 없이 소수점만 필요한 `%{y:.2f}` 형식은 정상 동작하므로 허용.
+
 **C9-4. Plotly display:none 금지 규칙 (CRITICAL)**
 - CRITICAL: Plotly 차트(`type='category'` 포함 모든 축 타입)를 `display:none` 또는 `visibility:hidden` 상태인 컨테이너에 직접 그리지 않는다. 초기 렌더링 시점에 컨테이너가 화면에 보이지 않으면 그 안에 차트를 삽입하지 않는다.
 - 이유: `display:none` 컨테이너는 width=0이 되어 모든 bar가 한 점으로 뭉치고, annotation이 우상단에 적층되는 현상이 발생한다. 이 증상은 JS(RAF, `Plotly.Plots.resize`, reflow 등)로 해결되지 않는다 — 초기 width=0 상태에서 layout이 한 번 확정되면 이후 resize가 정상 복구하지 못하는 케이스가 다수다.

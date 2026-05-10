@@ -154,6 +154,41 @@
   - 타입 불일치(`str` 기대 자리에 `int` 전달)
 - 적용: `if __name__ == "__main__":` 가드 안의 코드는 pytest가 실행하지 않으므로 `mypy`가 유일한 안전망이다. CLI 진입점·스크립트 파일에 특히 중요.
 
+### C9. UI 디버깅 프로토콜
+
+> stock_backtesting 프로젝트에서 `display:none` 컨테이너 안의 Plotly 차트 렌더링 버그를 JS 타이밍 수정으로 10회 이상 시도해 모두 실패하고, 결국 아키텍처 변경(`make_subplots(rows=2)`로 이미 보이는 figure에 서브플롯 삽입)으로 해결한 사건에서 도출한 규칙. UI 디버깅의 시간 낭비와 사용자 만족도 저하를 원천 차단한다.
+
+**C9-1. 3회 실패 에스컬레이션 규칙 (CRITICAL)**
+- CRITICAL: 같은 방향(예: JS timing 조정 — RAF, `Plotly.Plots.resize`, reflow, `setTimeout` 튜닝 등)으로 3회 이상 수정했는데도 동일 증상이 재현되면 즉시 멈춘다. 4번째 시도를 하지 않는다.
+- CRITICAL: 더 많은 JS 코드를 쌓지 않는다. 덕지덕지 쌓인 타이밍 fix는 다음 디버깅을 더 어렵게 만들고, 진짜 원인을 가린다.
+- CRITICAL: 사용자에게 명시적으로 보고한다 — "현재 접근(JS timing 조정)이 3회 실패해 막혔습니다. 구조적 대안을 제안드리겠습니다." 이후 C9-2 가설 사다리를 처음(아키텍처)부터 다시 탄다.
+- 이유: 같은 방향의 반복 실패는 가설 자체가 잘못됐다는 신호다. 더 많은 코드를 쌓는 것은 문제가 아니라 새로운 부채를 만드는 행위다.
+
+**C9-2. 가설 사다리 (CRITICAL)**
+- CRITICAL: UI/차트 디버깅의 가설 우선순위는 **아키텍처 → 데이터 → JS 타이밍 → CSS** 순서다. 이 순서를 거꾸로 탐색하지 않는다.
+  - **아키텍처**: 컨테이너 구조(display:none, visibility:hidden, width=0), DOM 삽입 시점, 렌더링 위치(이미 보이는 영역 vs 숨겨진 영역)
+  - **데이터**: 차트에 전달된 데이터 형태(`x`, `y` 배열 길이·타입·축 종류 `category`/`linear`/`date`)
+  - **JS 타이밍**: RAF, `Plotly.Plots.resize`, reflow, MutationObserver, `setTimeout` 등
+  - **CSS**: 스타일 충돌, z-index, overflow
+- CRITICAL: 각 단계에서 가설을 사용자에게 먼저 말로 보고하고 확인받은 뒤 구현한다. 가설 없이 코드를 수정하기 시작하지 않는다.
+- CRITICAL: 세부 기술 조정(JS timing fix, RAF, resize)은 가장 나중에 시도한다. 아키텍처·데이터 가설을 모두 검토한 후에만 JS 타이밍을 의심한다.
+- 이유: UI 버그의 다수는 아키텍처(특히 컨테이너 width=0)에서 비롯된다. JS 타이밍부터 들여다보면 진짜 원인은 영원히 숨고, 시간만 소모된다.
+
+**C9-3. 애자일 UI 개발 (CRITICAL)**
+- CRITICAL: UI/차트 변경은 **한 번에 하나씩** 진행한다. 여러 변경사항을 한꺼번에 구현하지 않는다.
+- CRITICAL: 각 단계는 다음 4스텝을 따른다 — **계획 제시 → 구현 → 사용자 확인 → 다음 단계**. 사용자 확인 없이 다음 단계로 넘어가지 않는다.
+- CRITICAL: 여러 변경사항을 한 커밋에 쌓지 않는다. 한 변경 = 한 확인 = 한 커밋.
+- 이유: 한 번에 여러 변경을 쌓으면 어느 변경이 어떤 효과를 냈는지 분리할 수 없고, 회귀 발생 시 원인 추적 비용이 폭증한다. 사용자가 중간에 방향을 바꾸고 싶을 때도 작은 단위로 진행해야 빠르게 돌아갈 수 있다.
+
+**C9-4. Plotly display:none 금지 규칙 (CRITICAL)**
+- CRITICAL: Plotly 차트(`type='category'` 포함 모든 축 타입)를 `display:none` 또는 `visibility:hidden` 상태인 컨테이너에 직접 그리지 않는다. 초기 렌더링 시점에 컨테이너가 화면에 보이지 않으면 그 안에 차트를 삽입하지 않는다.
+- 이유: `display:none` 컨테이너는 width=0이 되어 모든 bar가 한 점으로 뭉치고, annotation이 우상단에 적층되는 현상이 발생한다. 이 증상은 JS(RAF, `Plotly.Plots.resize`, reflow 등)로 해결되지 않는다 — 초기 width=0 상태에서 layout이 한 번 확정되면 이후 resize가 정상 복구하지 못하는 케이스가 다수다.
+- 올바른 방법:
+  1. **이미 화면에 보이는 figure의 `make_subplots(rows=N)`으로 서브플롯에 삽입한다.** Python 측에서 figure를 합쳐서 한 번에 렌더하면 width 문제가 발생하지 않는다.
+  2. 탭/accordion 안에 Plotly 차트가 반드시 있어야 한다면, 탭이 활성화된 직후 차트를 **최초 1회 생성**하거나(lazy init), 이미 그려진 차트는 탭 활성화 후 `Plotly.Plots.resize(div)`를 **단 한 번만** 호출한다(초기 렌더링이 아닌 resize만 호출).
+  3. 모달 안 차트도 동일 — 모달이 화면에 표시된 직후 차트를 생성한다.
+- 검출: 코드 리뷰 시 Plotly 차트 div가 `display:none` 또는 `hidden` 클래스가 적용된 부모 안에 있는지 grep으로 확인.
+
 ### C7b. Step별 AC(Acceptance Criteria) 차등화
 - CRITICAL: 커버리지 검증(`pytest --cov-fail-under=70`)은 **Tests step에서만** required다. 그 외 step(DB 스키마, Backend Core, Server 레이어, Frontend)에서는 `ruff check .` + 해당 step 기능 동작 확인까지만 요구한다.
 - CRITICAL: 이유: DB 스키마 step에서 억지로 70% 커버리지를 맞추려 하면 무의미한 테스트가 생성된다. 커버리지는 Tests step에서 전체를 통과하면 된다.
